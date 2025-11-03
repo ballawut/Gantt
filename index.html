@@ -1,1 +1,3151 @@
-hello
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Interactive Gantt Chart</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- SheetJS for Excel import/export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    .gantt-grid-container { display: grid; grid-template-columns: 330px 1fr; overflow: hidden; }
+    .gantt-timeline { overflow: auto; position: absolute; top: 0; left: 0; right: 0; bottom: 0; -webkit-overflow-scrolling: touch; }
+    .gantt-task-bar { position: absolute; border-radius: 9999px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); cursor: grab; transition: all 0.2s ease-in-out; font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 15; }
+    .gantt-task-bar:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); }
+    .gantt-task-bar.is-dragging, .gantt-milestone.is-dragging { opacity: 0.7; cursor: grabbing; z-index: 20; }
+    .task-list-item {
+        height: 60px; /* Standardized row height */
+    }
+    .task-avatar {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 1px solid #e5e7eb;
+        cursor: pointer;
+    }
+    .gantt-milestone {
+        position: absolute;
+        width: 14px;
+        height: 14px;
+        transform: translate(-50%, -50%) rotate(45deg);
+        cursor: pointer;
+        transition: all 0.2s ease;
+        z-index: 12;
+    }
+    .task-bar-label {
+        position: absolute;
+        font-size: 11px;
+        color: #374151; /* gray-700 */
+        white-space: nowrap;
+        overflow: visible;
+        pointer-events: none; /* So it doesn't interfere with dragging */
+        padding: 0 4px;
+    }
+    .task-date-label {
+        position: absolute;
+        top: 25px;
+        font-size: 10px;
+        color: #6b7280; /* gray-500 */
+        white-space: nowrap;
+        line-height: 12px; /* Match bar height */
+    }
+    .milestone-date-label {
+        position: absolute;
+        top: 24px; /* Vertically align with the milestone diamond */
+        font-size: 10px;
+        color: #6b7280; /* gray-500 */
+        white-space: nowrap;
+        cursor: pointer; /* To indicate it's clickable */
+    }
+    .gantt-milestone:hover {
+        transform: translate(-50%, -50%) rotate(45deg) scale(1.1);
+    }
+    .milestone-line { position: absolute; border-left: 1px dashed; top: 0; bottom: 0; z-index: 11; }
+    .milestone-label {
+        position: absolute;
+        transform: translateX(-50%);
+        white-space: nowrap;
+        background-color: transparent;
+        padding: 2px 6px;
+        border-radius: 4px;
+        box-shadow: none;
+        font-size: 11px;
+        font-weight: 500;
+        z-index: 13;
+        cursor: pointer;
+    }
+    .milestone-drag-handle {
+        position: absolute;
+        bottom: -5px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        cursor: ns-resize;
+        z-index: 14;
+    }
+    .task-bar-progress { position: absolute; height: 100%; left: 0; top: 0; pointer-events: none; }
+    .task-bar-content { position: relative; z-index: 2; }
+    .resize-handle { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 3; }
+    .resize-handle-left { left: 0; }
+    .resize-handle-right { right: 0; }
+    .zoom-panel {
+      position: absolute;
+      left: 0.75rem;
+      bottom: 0.75rem;
+      background: rgba(255,255,255,0.85);
+      backdrop-filter: saturate(1.2) blur(2px);
+      border-radius: 0.5rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      padding: 0.25rem 0.35rem;
+      display: flex;
+      gap: 0.25rem;
+      z-index: 25;
+    }
+    .gantt-grid-line { border-right: 1px solid #e2e8f0; }
+    .holiday-highlight { background-color: rgba(229, 231, 235, 0.6); }
+    .modal-container { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 1rem; background-color: rgba(0,0,0,0.5); }
+    .alert-modal-container { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 1rem; background-color: rgba(0,0,0,0.5); }
+    .delete-confirm-modal-container { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 1rem; background-color: rgba(0,0,0,0.5); }
+    
+    /* Note preview styles - similar to imageHoverPreview */
+    #noteHoverPreview {
+        position: fixed;
+        max-width: 300px;
+        max-height: 200px;
+        border-radius: 0.5rem;
+        box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+        border: 3px solid white;
+        z-index: 1000;
+        pointer-events: none;
+        background-color: white;
+        color: black;
+        padding: 12px;
+        font-size: 14px;
+        line-height: 1.4;
+        word-wrap: break-word;
+        transition: opacity 0.15s ease-in-out;
+        opacity: 0;
+        visibility: hidden;
+    }
+    
+    #noteHoverPreview.show {
+        opacity: 1;
+        visibility: visible;
+    }
+    #dependencyLines path { transition: d 0.2s ease-in-out; }
+    .deps-hidden { display: none !important; }
+    .category-item.dragging, .task-sub-item.dragging { opacity: 0.5; background: #e0e7ff; }
+    .category-item .drag-handle, .task-sub-item .drag-handle { cursor: grab; }
+    .task-sub-item {
+      background-color: #f9fafb; /* gray-50 */
+    }
+    .color-picker-wrapper {
+        position: relative;
+        width: 24px;
+        height: 24px;
+    }
+    .current-color-swatch {
+        width: 100%;
+        height: 100%;
+        border-radius: 0.25rem;
+        border: 1px solid #d1d5db; /* gray-300 */
+        cursor: pointer;
+    }
+    .color-palette-popup {
+        position: fixed;
+        background-color: white;
+        border-radius: 0.375rem;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        padding: 8px;
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 6px;
+        z-index: 60;
+    }
+    .palette-swatch {
+        width: 24px;
+        height: 24px;
+        border-radius: 0.25rem;
+        cursor: pointer;
+        border: 2px solid transparent;
+        transition: transform 0.1s ease-in-out;
+    }
+    .palette-swatch:hover {
+        transform: scale(1.15);
+    }
+    .palette-swatch.selected {
+        border-color: #3b82f6; /* blue-500 */
+    }
+    .calendar-day { cursor: pointer; border-radius: 9999px; width: 2rem; height: 2rem; display: flex; align-items: center; justify-content: center; position: relative; }
+    #holidayModal .calendar-day { width: 1.6rem; height: 1.6rem; }
+    .calendar-day:not(.is-placeholder):hover { background-color: #e5e7eb; }
+    .calendar-day.is-weekend { color: #9ca3af; }
+    .calendar-day.is-holiday { color: white; }
+    .calendar-day.is-holiday::before { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 1.75rem; height: 1.75rem; background-color: #ef4444; border-radius: 50%; z-index: 0; }
+    .calendar-day > span { position: relative; z-index: 1; }
+    .calendar-day.is-today { position: relative; }
+    .calendar-day.is-today::after { content: ''; position: absolute; bottom: -2px; left: 50%; transform: translateX(-50%); width: 5px; height: 5px; background-color: #3b82f6; border-radius: 50%; }
+    .calendar-day.is-holiday.is-today::after { background-color: white; }
+    .milestone-color-picker {
+        width: 24px;
+        height: 24px;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        appearance: none;
+        background-color: transparent;
+    }
+    .milestone-color-picker::-webkit-color-swatch-wrapper {
+        padding: 0;
+    }
+    .milestone-color-picker::-webkit-color-swatch {
+        border-radius: 0.25rem;
+        border: 1px solid #ccc;
+    }
+    .category-image-preview-container {
+        position: relative;
+        display: flex;
+        align-items: center;
+    }
+    .progress-ring__circle {
+        transition: stroke-width 0.2s ease-in-out, stroke 0.2s ease-in-out;
+    }
+    .overall-chart-container:hover .progress-ring__circle {
+        stroke-width: 4;
+        stroke: #6366f1; /* indigo-500 */
+    }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+  <div id="app" class="h-screen flex flex-col p-4 md:p-6 max-w-screen-2xl mx-auto w-full">
+    <header class="flex flex-wrap items-center justify-between mb-6">
+      <div class="flex items-center">
+        <h1 id="projectTitle" class="text-2xl md:text-3xl font-bold text-gray-700 cursor-pointer hover:bg-gray-200 p-1 rounded-md transition-colors">Interactive Gantt Chart</h1>
+        <span id="saveStatus" class="ml-3 text-sm font-medium text-yellow-600 hidden">* unsaved</span>
+      </div>
+      <div class="flex items-center space-x-2 mt-4 md:mt-0">
+        <input type="file" id="importFile" class="hidden" accept=".xlsx, .xls" />
+        <button id="importBtn" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg flex items-center space-x-2 transition duration-300">
+          <i data-lucide="folder-open" class="w-5 h-5"></i>
+          <span>Open</span>
+        </button>
+        <button id="saveBtn" class="bg-gray-700 hover:bg-gray-800 text-white font-bold py-2 px-4 rounded-lg flex items-center space-x-2 transition duration-300">
+          <i data-lucide="save" class="w-5 h-5"></i>
+          <span>Save As</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col flex-1 min-h-0">
+      <div id="categoryLegend" class="p-4 border-b border-gray-200 bg-white"></div>
+      <div id="ganttChartContainer" class="gantt-grid-container flex-1 min-h-0">
+        <!-- Left: Task list -->
+        <div id="taskList" class="flex flex-col min-h-0 border-r border-gray-200 bg-gray-50 overflow-hidden">
+          <div class="flex-shrink-0">
+            <div class="h-16 flex items-center justify-between px-4 border-b border-gray-200 bg-gray-50 z-20">
+              <div class="flex items-center space-x-2 flex-1">
+                <h3 class="font-semibold">Task</h3>
+                <button id="addTaskBtn" class="p-1 text-gray-500 hover:text-blue-600 rounded-md hover:bg-gray-200 transition-colors" title="Add new task">
+                  <i data-lucide="plus-circle" class="w-5 h-5"></i>
+                </button>
+                <button id="sortTaskBtn" class="p-1 text-gray-500 hover:text-blue-600 rounded-md hover:bg-gray-200 transition-colors" title="Sort by date">
+                  <i data-lucide="calendar-days" class="w-5 h-5"></i>
+                </button>
+                <button id="manageCategoriesBtn" class="p-1 text-gray-500 hover:text-blue-600 rounded-md hover:bg-gray-200 transition-colors" title="Manage categories">
+                  <i data-lucide="settings-2" class="w-5 h-5"></i>
+                </button>
+                <button id="manageMilestonesBtn" class="p-1 text-gray-500 hover:text-blue-600 rounded-md hover:bg-gray-200 transition-colors" title="Manage milestones">
+                  <i data-lucide="flag" class="w-5 h-5"></i>
+                </button>
+                <button id="manageHolidaysBtn" class="p-1 text-gray-500 hover:text-blue-600 rounded-md hover:bg-gray-200 transition-colors" title="Manage holidays">
+                  <i data-lucide="calendar-off" class="w-5 h-5"></i>
+                </button>
+                <button id="toggleDependenciesBtn" class="p-1 text-blue-600 bg-blue-100 rounded-md hover:bg-blue-200 transition-colors" title="Hide dependency lines">
+                    <i data-lucide="link" class="w-5 h-5"></i>
+                </button>
+                <button id="toggleDashboardBtn" class="p-1 text-blue-600 bg-blue-100 rounded-md hover:bg-blue-200 transition-colors" title="Hide Dashboard">
+                  <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
+                </button>
+              </div>
+            </div>
+            <div style="height: 60px;" class="flex items-center justify-between px-4 border-b border-gray-200 bg-gray-50 z-10">
+                <h3 class="font-semibold text-sm text-gray-600">Milestones</h3>
+                <button id="toggleAllMilestonesLockBtn" class="p-1 text-gray-500 hover:text-blue-600 rounded-md hover:bg-gray-200 transition-colors" title="Lock/Unlock All Milestones">
+                    <i data-lucide="unlock" class="w-4 h-4"></i>
+                </button>
+            </div>
+          </div>
+          <div id="taskListBody" class="flex-1 overflow-y-auto pb-4"></div>
+        </div>
+
+        <!-- Right: Timeline -->
+        <div class="relative flex flex-col min-h-0 overflow-hidden">
+            <div id="ganttTimelineHeaderContainer" class="relative overflow-x-visible bg-white flex-shrink-0 z-10">
+                <div id="timelineHeader" class="relative" style="height: 64px;"></div>
+                <div id="milestoneTrack" class="relative border-b border-gray-200" style="height: 60px;"></div>
+            </div>
+            <div id="ganttTimelineBodyContainer" class="relative flex-1 overflow-auto">
+                <div id="timelineBody" class="relative">
+                </div>
+            </div>
+            <svg id="dependencyLines" class="absolute top-0 left-0 pointer-events-none" style="z-index: 20;"></svg>
+            <div class="zoom-panel">
+                <button id="scrollToTodayBtn" class="p-1 hover:bg-gray-100 rounded" title="Go to Today">
+                  <i data-lucide="calendar-check" class="w-4 h-4"></i>
+                </button>
+                <button id="toggleScaleBtn" class="p-1 hover:bg-gray-100 rounded" title="Toggle Day/Week View">
+                    <i data-lucide="calendar-days" class="w-4 h-4"></i>
+                </button>
+                <button id="zoomOutBtn" class="p-1 hover:bg-gray-100 rounded" title="Zoom out">
+                  <i data-lucide="zoom-out" class="w-4 h-4"></i>
+                </button>
+                <button id="zoomInBtn" class="p-1 hover:bg-gray-100 rounded" title="Zoom in">
+                  <i data-lucide="zoom-in" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmation Modal -->
+  <div id="confirmModal" class="hidden modal-container">
+      <div class="bg-white rounded-lg shadow-xl w-11/12 md:w-1/3 max-w-md relative">
+        <div class="p-6">
+          <div class="flex items-start">
+              <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100 sm:mx-0 sm:h-10 sm:w-10">
+                  <i data-lucide="alert-triangle" class="h-6 w-6 text-yellow-600"></i>
+              </div>
+              <div class="ml-4 text-left">
+                  <h3 class="text-lg leading-6 font-medium text-gray-900">Unsaved Changes</h3>
+                  <div class="mt-2">
+                      <p class="text-sm text-gray-500">
+                          You have unsaved changes. Are you sure you want to open a new file? Your current changes will be lost.
+                      </p>
+                  </div>
+              </div>
+          </div>
+        </div>
+        <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse rounded-b-lg">
+          <button id="confirmProceedBtn" type="button" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+            Open Anyway
+          </button>
+          <button id="confirmCancelBtn" type="button" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+            Cancel
+          </button>
+        </div>
+      </div>
+  </div>
+
+  <!-- Alert Modal -->
+  <div id="alertModal" class="hidden alert-modal-container">
+      <div class="bg-white rounded-lg shadow-xl w-11/12 md:w-1/3 max-w-md relative">
+        <div class="p-6">
+          <div class="flex items-start">
+              <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 sm:mx-0 sm:h-10 sm:w-10">
+                  <i data-lucide="info" class="h-6 w-6 text-blue-600"></i>
+              </div>
+              <div class="ml-4 text-left">
+                  <h3 id="alertTitle" class="text-lg leading-6 font-medium text-gray-900">Information</h3>
+                  <div class="mt-2">
+                      <p id="alertMessage" class="text-sm text-gray-500">
+                          This is an alert message.
+                      </p>
+                  </div>
+              </div>
+          </div>
+        </div>
+        <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse rounded-b-lg">
+          <button id="alertOkBtn" type="button" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none sm:w-auto sm:text-sm">
+            OK
+          </button>
+        </div>
+      </div>
+  </div>
+
+  <!-- Delete Confirmation Modal -->
+  <div id="deleteConfirmModal" class="hidden delete-confirm-modal-container">
+      <div class="bg-white rounded-lg shadow-xl w-11/12 md:w-1/3 max-w-md relative">
+        <div class="p-6">
+          <div class="flex items-start">
+              <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                  <i data-lucide="trash-2" class="h-6 w-6 text-red-600"></i>
+              </div>
+              <div class="ml-4 text-left">
+                  <h3 id="deleteTitle" class="text-lg leading-6 font-medium text-gray-900">Confirm Delete</h3>
+                  <div class="mt-2">
+                      <p id="deleteMessage" class="text-sm text-gray-500">
+                          Are you sure you want to delete this item?
+                      </p>
+                  </div>
+              </div>
+          </div>
+        </div>
+        <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse rounded-b-lg">
+          <button id="deleteConfirmBtn" type="button" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+            Delete
+          </button>
+          <button id="deleteCancelBtn" type="button" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+            Cancel
+          </button>
+        </div>
+      </div>
+  </div>
+
+  <!-- Task Modal -->
+  <div id="taskModal" class="hidden modal-container">
+    <div class="bg-white rounded-lg shadow-xl w-11/12 md:w-1/3 max-w-lg relative flex flex-col max-h-[90vh]">
+      <div class="p-6 flex-1 overflow-y-auto">
+        <div class="flex items-center gap-2 mb-4">
+          <h3 id="modalTitle" class="text-xl font-semibold">Add New Task</h3>
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="plus-circle" class="lucide lucide-plus-circle w-5 h-5 text-gray-500"><circle cx="12" cy="12" r="10"></circle><path d="M8 12h8"></path><path d="M12 8v8"></path></svg>
+        </div>
+        <form id="taskForm">
+          <input type="hidden" id="taskId" />
+          <div class="mb-4">
+            <label for="taskName" class="block text-sm font-medium text-gray-700 mb-1">Task Name</label>
+            <input type="text" id="taskName" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" required />
+          </div>
+          <div class="mb-4">
+            <label for="taskCategory" class="block text-sm font-medium text-gray-700 mb-1">Category</label>
+            <div class="relative" id="category-combobox-container">
+                <input type="text" id="taskCategory" class="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., Planning, Development" autocomplete="off" />
+                <button type="button" id="category-combobox-button" class="absolute inset-y-0 right-0 flex items-center pr-2">
+                    <i data-lucide="chevrons-up-down" class="w-5 h-5 text-gray-400"></i>
+                </button>
+                <div id="category-combobox-options" class="hidden absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-40 overflow-y-auto">
+                    <!-- Options populated by JS -->
+                </div>
+            </div>
+          </div>
+           <div class="mb-4">
+              <label for="taskInCharge" class="block text-sm font-medium text-gray-700 mb-1">In Charge</label>
+              <input type="text" id="taskInCharge" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="Person's Name">
+          </div>
+          <div class="mb-4 flex items-center">
+            <input type="checkbox" id="isMilestone" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+            <label for="isMilestone" class="ml-2 block text-sm text-gray-900">Is Milestone</label>
+          </div>
+          <div class="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <label id="startDateLabel" for="startDate" class="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+              <input type="date" id="startDate" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" required />
+            </div>
+            <div id="endDateContainer">
+              <label for="endDate" class="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+              <input type="date" id="endDate" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" required />
+            </div>
+          </div>
+          <div id="percentCompleteContainer" class="mb-4">
+            <label for="percentComplete" class="block text-sm font-medium text-gray-700 mb-1">Percent Complete</label>
+            <div class="flex items-center space-x-3">
+              <input type="range" id="percentComplete" min="0" max="100" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer" />
+              <span id="percentCompleteValue" class="font-semibold text-gray-700 w-12 text-center">0%</span>
+            </div>
+          </div>
+          <div class="mb-4">
+            <label for="taskNote" class="block text-sm font-medium text-gray-700 mb-1">Note</label>
+            <textarea id="taskNote" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="Add a note..."></textarea>
+          </div>
+          <div class="mb-6">
+            <label for="dependencies" class="block text-sm font-medium text-gray-700 mb-1">Dependencies <span class="font-normal text-gray-500">(Tasks to finish first. Hold Ctrl to deselect.)</span></label>
+            <select multiple id="dependencies" class="w-full h-24 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"></select>
+          </div>
+        </form>
+      </div>
+      <div class="p-6 border-t border-gray-200 flex-shrink-0">
+        <div class="flex justify-between items-center">
+          <button id="deleteTaskBtn" class="text-red-600 hover:text-red-800 font-medium transition duration-300 hidden p-2 rounded-md hover:bg-red-100"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+          <div class="flex justify-end items-center space-x-3">
+            <button id="cancelBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Cancel</button>
+            <button id="saveTaskBtn" class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Category Modal -->
+  <div id="categoryModal" class="hidden modal-container">
+    <div class="bg-white rounded-lg shadow-xl w-11/12 md:w-1/3 max-w-lg relative flex flex-col max-h-[90vh]">
+      <button id="closeCategoryModalBtn" class="absolute top-4 right-4 p-2 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-full z-10">
+          <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+      <div class="p-6 flex-1 overflow-y-auto">
+        <div class="flex items-center gap-2 mb-1">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="settings-2" class="lucide lucide-settings-2 w-5 h-5 text-gray-600"><path d="M14 17H5"></path><path d="M19 7h-9"></path><circle cx="17" cy="17" r="3"></circle><circle cx="7" cy="7" r="3"></circle></svg>
+          <h3 class="text-xl font-semibold">Manage Category and Task</h3>
+        </div>
+        <p class="text-sm text-gray-500 mb-4">Drag to reorder. Double-click to edit.</p>
+        <div id="categoryList" class="space-y-2 max-h-[700px] overflow-y-auto mb-4 border rounded-md p-2"></div>
+        <form id="addCategoryForm" class="space-y-2 mt-4">
+           <div class="flex items-center space-x-2">
+                <div id="newCategoryImageContainer" class="category-image-container w-8 h-8 flex-shrink-0 bg-gray-200 rounded flex items-center justify-center cursor-pointer hover:bg-gray-300" title="Add Image URL">
+                    <i data-lucide="image-plus" class="w-5 h-5 text-gray-400"></i>
+                </div>
+               <div class="color-picker-wrapper flex-shrink-0">
+                   <div id="newCategoryColor" class="current-color-swatch" style="background-color: #A9A9A9;" data-color="#A9A9A9"></div>
+               </div>
+              <input type="text" id="newCategoryName" class="flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-md" placeholder="Add new category name..." required />
+              <button type="submit" class="flex-shrink-0 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">Add</button>
+           </div>
+           <input type="hidden" id="newCategoryImageUrlHidden" value="">
+        </form>
+      </div>
+    </div>
+  </div>
+
+    <!-- Category Image URL Modal -->
+    <div id="imageUrlModal" class="hidden modal-container">
+        <div class="bg-white rounded-lg shadow-xl w-11/12 md:w-1/3 max-w-md relative">
+          <div class="p-6">
+            <h3 id="imageUrlModalTitle" class="text-lg font-semibold mb-4">Edit Image URL</h3>
+            <form id="imageUrlForm">
+              <input type="hidden" id="imageUrlCategoryName" />
+              <div>
+                <label for="categoryImageUrlInput" class="block text-sm font-medium text-gray-700 mb-1">Image URL</label>
+                <input type="text" id="categoryImageUrlInput" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500" placeholder="https://example.com/image.png" />
+              </div>
+            </form>
+          </div>
+          <div class="p-4 bg-gray-50 border-t border-gray-200 flex justify-end items-center space-x-3">
+            <button id="cancelImageUrlBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Cancel</button>
+            <button id="saveImageUrlBtn" class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">Save</button>
+          </div>
+        </div>
+    </div>
+
+  <!-- Holiday Modal -->
+  <div id="holidayModal" class="hidden modal-container">
+    <div class="bg-white rounded-lg shadow-xl flex flex-col relative" style="width: 1000px; max-width: 95vw; height: 90vh;">
+       <button id="closeHolidayModalBtn" class="absolute top-4 right-4 p-2 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-full z-10">
+          <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+      <div class="p-6 pb-4 flex-shrink-0 border-b">
+        <div class="flex items-center justify-center gap-2 mb-4">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="calendar-off" class="lucide lucide-calendar-off w-5 h-5 text-gray-600"><path d="M4.2 4.2A2 2 0 0 0 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 1.82-1.18"></path><path d="M21 15.5V6a2 2 0 0 0-2-2H9.5"></path><path d="M16 2v4"></path><path d="M3 10h7"></path><path d="M21 10h-5.5"></path><path d="m2 2 20 20"></path></svg>
+          <h3 class="text-xl font-semibold">Manage Holidays</h3>
+        </div>
+        <div class="flex items-center justify-center space-x-4">
+          <button id="prevYearBtn" class="p-2 rounded-md hover:bg-gray-200"><i data-lucide="chevron-left"></i></button>
+          <button id="todayYearBtn" class="px-4 py-2 rounded-md text-sm font-medium border border-gray-300 hover:bg-gray-100 transition duration-300">Today</button>
+          <span id="calendarYear" class="text-lg font-bold w-24 text-center">2025</span>
+          <button id="nextYearBtn" class="p-2 rounded-md hover:bg-gray-200"><i data-lucide="chevron-right"></i></button>
+        </div>
+        <div class="text-center text-sm text-gray-600 mt-2 space-x-4">
+          <span>Holidays: <span id="holidayCount" class="font-bold text-red-600">0</span></span>
+          <span>Working Days: <span id="workingDayCount" class="font-bold text-green-600">0</span></span>
+        </div>
+      </div>
+      <div id="calendarGrid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-6 overflow-y-auto flex-1 min-h-0"></div>
+    </div>
+  </div>
+  
+  <!-- Milestone Modal -->
+  <div id="milestoneModal" class="hidden modal-container">
+      <div class="bg-white rounded-lg shadow-xl w-11/12 md:w-2/5 max-w-2xl relative">
+          <button id="closeMilestoneModalBtn" class="absolute top-4 right-4 p-2 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-full z-10">
+              <i data-lucide="x" class="w-5 h-5"></i>
+          </button>
+          <div class="p-6">
+              <div class="flex items-center gap-2 mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="flag" class="lucide lucide-flag w-5 h-5 text-gray-600"><path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528"></path></svg>
+                <h3 class="text-xl font-semibold">Manage Milestones</h3>
+              </div>
+              <div id="milestoneList" class="max-h-64 overflow-y-auto mb-4 border rounded-md p-2 space-y-2"></div>
+              <form id="addMilestoneForm" class="flex items-center space-x-2 mt-4">
+                  <div class="color-picker-wrapper flex-shrink-0">
+                      <div id="newMilestoneColor" class="current-color-swatch" style="background-color: #A9A9A9;" data-color="#A9A9A9"></div>
+                  </div>
+                  <input type="text" id="newMilestoneName" class="flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-md" placeholder="Milestone Name" required>
+                  <input type="date" id="newMilestoneDate" class="flex-shrink-0 px-3 py-2 border border-gray-300 rounded-md" required>
+                  <button type="submit" class="flex-shrink-0 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">Add</button>
+              </form>
+          </div>
+      </div>
+  </div>
+
+  <!-- Milestone Edit Modal -->
+  <div id="milestoneEditModal" class="hidden modal-container">
+    <div class="bg-white rounded-lg shadow-xl w-11/12 md:w-1/3 max-w-lg relative flex flex-col max-h-[90vh]">
+      <div class="p-6 flex-1 overflow-y-auto">
+        <h3 class="text-xl font-semibold mb-4">Edit Milestone</h3>
+        <form id="milestoneEditForm">
+          <input type="hidden" id="milestoneId" />
+          <div class="mb-4">
+            <label for="milestoneEditName" class="block text-sm font-medium text-gray-700 mb-1">Milestone Name</label>
+            <input type="text" id="milestoneEditName" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" required />
+          </div>
+          <div class="mb-4">
+            <label for="milestoneEditDate" class="block text-sm font-medium text-gray-700 mb-1">Date</label>
+            <input type="date" id="milestoneEditDate" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" required />
+          </div>
+          <div class="mb-6">
+            <label for="milestoneDependencies" class="block text-sm font-medium text-gray-700 mb-1">Dependencies <span class="font-normal text-gray-500">(Tasks to finish first)</span></label>
+            <select multiple id="milestoneDependencies" class="w-full h-24 px-3 py-2 border border-gray-300 rounded-md shadow-sm"></select>
+          </div>
+        </form>
+      </div>
+      <div class="p-6 border-t border-gray-200 flex-shrink-0">
+        <div class="flex justify-end items-center space-x-3">
+          <button id="cancelMilestoneEditBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Cancel</button>
+          <button id="saveMilestoneEditBtn" class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="globalColorPalette" class="color-palette-popup hidden"></div>
+  <img id="imageHoverPreview" class="hidden" style="position: fixed; width: 128px; height: 128px; border-radius: 0.5rem; box-shadow: 0 8px 16px rgba(0,0,0,0.2); border: 3px solid white; z-index: 1000; pointer-events: none; object-fit: cover; background-color: #e5e7eb; transition: opacity 0.15s ease-in-out;" />
+  <div id="noteHoverPreview" class="hidden"></div>
+
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+
+            // --- STATE ---
+            let tasks = [];
+            let milestones = [];
+            let isDataDirty = false;
+            let lastImportedFilename = null;
+            let dayWidth = 40;
+            let currentTimelineDates = [];
+            let currentTaskIndexMap = new Map();
+            let sortMode = 'category';
+            let categoryOrder = [];
+            let holidays = [];
+            let calendarDisplayYear = new Date().getFullYear();
+            let showDependencies = true;
+            let milestoneSortMode = 'date'; // 'date' or 'name'
+            let categorySortMode = 'custom'; // 'custom' or 'name'
+            let categoryCollapseState = {};
+            let isDashboardVisible = true;
+            let timelineViewMode = 'day'; // 'day' or 'week'
+            const MILESTONE_TRACK_HEIGHT = 60;
+            const TASK_ROW_HEIGHT = 60;
+            
+            // --- DRAG & DROP STATE ---
+            let isDragging = false;
+            let dragTask = null;
+            let dragMode = null;
+            let startX = 0;
+            let initialTaskStart = null;
+            let initialTaskEnd = null;
+            let initialLeft = 0;
+            let initialWidth = 0;
+            let isDraggingMilestone = false;
+            let milestoneDidMove = false;
+            let draggedMilestone = null;
+            let initialMilestoneDate = null;
+            let isAddTaskModalFromCategoryModal = false;
+            let isDraggingMilestoneLine = false;
+            let initialLineHeight = 0;
+            let initialMouseY = 0;
+            let isComboboxListenerActive = false;
+            
+            // --- DOM ELEMENTS ---
+            const projectTitleEl = document.getElementById('projectTitle');
+            const saveStatus = document.getElementById('saveStatus');
+            const taskListBody = document.getElementById('taskListBody');
+            const timelineHeaderContainer = document.getElementById('ganttTimelineHeaderContainer');
+            const timelineHeader = document.getElementById('timelineHeader');
+            const milestoneTrack = document.getElementById('milestoneTrack');
+            const timelineBodyContainer = document.getElementById('ganttTimelineBodyContainer');
+            const timelineBody = document.getElementById('timelineBody');
+            const importFileInput = document.getElementById('importFile');
+            const dependencyLinesSvg = document.getElementById('dependencyLines');
+            const globalColorPalette = document.getElementById('globalColorPalette');
+            let activeColorSwatch = null;
+            
+const colorPalette = [
+  // Row 1: Bright & Saturated
+  '#E6194B', '#F58231', '#FFE119', '#3CB44B', '#4363D8', '#911EB4',
+  // Row 2: Medium & Clear
+  '#F032E6', '#FAA300', '#BFEF45', '#42D4F4', '#000075', '#A9A9A9',
+  // Row 3: Light & Soft
+  '#FABED4', '#FFD8B1', '#FFFAC8', '#A9FFC3', '#96CBFF', '#E6BEFF',
+  // Row 4: Dark & Deep
+  '#800000', '#9A6324', '#808000', '#006400', '#483D8B', '#000000'
+];
+
+            const calculateWorkingDays = (startDate, endDate) => {
+                let currentDate = new Date(startDate + 'T00:00:00');
+                const endingDate = new Date(endDate + 'T00:00:00');
+                let count = 0;
+                while (currentDate <= endingDate) {
+                    const dateString = fmt(currentDate);
+                    if (!holidays.includes(dateString)) {
+                        count++;
+                    }
+                    currentDate.setDate(currentDate.getDate() + 1);
+                }
+                return count;
+            };
+
+            const calculateTotalDays = (start, end) => {
+                const startDate = new Date(start + 'T00:00:00');
+                const endDate = new Date(end + 'T00:00:00');
+                if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) return 1;
+                return getDayDiff(startDate, endDate) + 1;
+            };
+
+            const calculateWeeksWithPrecision = (totalDays) => {
+                if (totalDays <= 0) return 0;
+                // Calculate weeks with a precision of 0.1
+                const weeks = Math.round((totalDays / 7) / 0.1) * 0.1;
+                // Avoid floating point issues and format to max 1 decimal place
+                return parseFloat(weeks.toFixed(1));
+            };
+
+            // ---- SAMPLE DATA (auto around today) ----
+            const generateSampleData = () => {
+                const today = new Date();
+                const d = (offset) => { const t = new Date(today); t.setDate(t.getDate() + offset); return t; };
+                const toStr = (date) => {
+                    const y = date.getFullYear();
+                    const m = String(date.getMonth()+1).padStart(2,'0');
+                    const dd = String(date.getDate()).padStart(2,'0');
+                    return `${y}-${m}-${dd}`;
+                };
+                const cats = [
+                    { name: 'Category1', color: '#4CAF50', imageUrl: '' },
+                    { name: 'Category2', color: '#2196F3', imageUrl: '' },
+                    { name: 'Category3', color: '#FFC107', imageUrl: '' }
+                ];
+                const sample = [
+                { id: 1, name: 'Task1', category: 'Category1', start: toStr(d(-2)), end: toStr(d( 2)), percentComplete: 30,  dependencies: [], incharge: 'Alice', categoryOrderIndex: 0, note: 'This is the first task.', isLocked: false  },
+                { id: 2, name: 'Task2', category: 'Category1', start: toStr(d( 0)), end: toStr(d( 5)), percentComplete: 10,  dependencies: ['task-1'], incharge: 'Alice', categoryOrderIndex: 1, note: '', isLocked: false },
+                { id: 3, name: 'Task3', category: 'Category2', start: toStr(d(-1)), end: toStr(d( 3)), percentComplete: 60,  dependencies: [], incharge: 'Bob', categoryOrderIndex: 0, note: '', isLocked: true  },
+                { id: 4, name: 'Task4', category: 'Category2', start: toStr(d( 4)), end: toStr(d( 8)), percentComplete: 0,   dependencies: ['task-3', 'milestone-2'], incharge: 'Charlie', categoryOrderIndex: 1, note: '', isLocked: false },
+                { id: 5, name: 'Task5', category: 'Category3', start: toStr(d(-3)), end: toStr(d(-1)), percentComplete: 100, dependencies: [], incharge: 'Bob', categoryOrderIndex: 0, note: 'This task is already completed.', isLocked: false  },
+                { id: 6, name: 'Task6', category: 'Category3', start: toStr(d( 1)), end: toStr(d( 6)), percentComplete: 45,  dependencies: ['task-5'], incharge: 'David', categoryOrderIndex: 1, note: '', isLocked: false },
+            ];
+            const sampleMilestones = [
+                { id: 1, name: 'Milestone1', date: toStr(d(-5)), color: '#A9A9A9', labelPosition: 'bottom', dateLabelPosition: 'right', dependencies: [], isLocked: false },
+                { id: 2, name: 'Milestone2', date: toStr(d(3)), color: '#A9A9A9', labelPosition: 'bottom', dateLabelPosition: 'right', dependencies: [], isLocked: false },
+                { id: 3, name: 'Milestone3', date: toStr(d(10)), color: '#A9A9A9', labelPosition: 'bottom', dateLabelPosition: 'right', dependencies: [], isLocked: false }
+            ];
+            return { sample, cats, milestones: sampleMilestones };
+        };
+
+        const updateSaveStatus = (isDirty) => {
+                isDataDirty = isDirty;
+                saveStatus.classList.toggle('hidden', !isDirty);
+            };
+
+            const stringToHslColor = (str, s = 70, l = 50) => {
+                if (!str) return `hsl(0, 0%, 70%)`;
+                let hash = 0; for (let i = 0; i < str.length; i++) { hash = str.charCodeAt(i) + ((hash << 5) - hash); }
+                const h = ((hash % 360) + 360) % 360; return `hsl(${h}, ${s}%, ${l}%)`;
+            };
+
+            // Distinct category colors (override hash when possible)
+            let categoryColorMap = new Map();
+            const getCategoryColor = (catName) => {
+                if (!catName) return '#a1a1aa'; // a neutral grey for uncategorized
+                const category = categoryOrder.find(c => c.name === catName);
+                return category ? category.color : '#7171a'; // Return saved color or fallback to another grey
+            };
+            const rebuildCategoryColors = () => {
+                categoryColorMap.clear();
+                const cats = categoryOrder.filter(Boolean);
+                const GA = 137.508;
+                const base = 17;
+                const s = 60; // slightly stronger pastel
+                const l = 70; // slightly stronger pastel
+                cats.forEach((c, i) => {
+                    const h = ((base + i * GA) % 360);
+                    categoryColorMap.set(c, `hsl(${h.toFixed(1)}, ${s}%, ${l}%)`);
+                });
+            };
+
+            const hslToRgba = (hsl, alpha = 1) => {
+                if (!hsl) return 'rgba(170,170,170,1)';
+                let sep = hsl.indexOf(",") > -1 ? "," : " ";
+                const parts = hsl.substr(4).split(')')[0].split(sep);
+                let h = parseFloat(parts[0]); let s = parseFloat(parts[1]) / 100; let l = parseFloat(parts[2]) / 100;
+                let c = (1 - Math.abs(2*l - 1)) * s, x = c * (1 - Math.abs((h/60) % 2 - 1)), m = l - c/2, r=0,g=0,b=0;
+                if (0<=h&&h<60){r=c;g=x;b=0;} else if(60<=h&&h<120){r=x;g=c;b=0;} else if(120<=h&&h<180){r=0;g=c;b=x;} else if(180<=h&&h<240){r=0;g=x;b=c;} else if(240<=h&&h<300){r=x;g=0;b=c;} else {r=c;g=0;b=x;}
+                r=Math.round((r+m)*255); g=Math.round((g+m)*255); b=Math.round((b+m)*255);
+                return `rgba(${r},${g},${b},${alpha})`;
+            };
+
+            const hexToRgba = (hex, alpha = 1) => {
+                if (!hex) hex = '#cccccc';
+                const bigint = parseInt(hex.slice(1), 16);
+                const r = (bigint >> 16) & 255;
+                const g = (bigint >> 8) & 255;
+                const b = bigint & 255;
+                return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+            };
+
+            const addDays = (date, days) => {
+                const r = new Date(date.getTime() + (days * 86400000));
+                return r;
+            };
+            const getDayDiff = (a, b) => Math.round((b - a) / 86400000);
+            const fmt = (d) => { if(!(d instanceof Date) || isNaN(d)) return ''; const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${day}`; };
+            const formatDateShort = (dateInput) => {
+                let date;
+                if (dateInput instanceof Date) {
+                    date = dateInput;
+                } else if (typeof dateInput === 'string') {
+                    date = new Date(dateInput + 'T00:00:00');
+                } else {
+                    return '...';
+                }
+
+                if (isNaN(date.getTime())) return '...';
+                
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            };
+            
+            const updateDependencyToggleUI = () => {
+                const btn = document.getElementById('toggleDependenciesBtn');
+                if (!btn) return;
+                dependencyLinesSvg.classList.toggle('deps-hidden', !showDependencies);
+                if (showDependencies) {
+                    btn.classList.add('text-blue-600', 'bg-blue-100');
+                    btn.innerHTML = `<i data-lucide="link" class="w-5 h-5"></i>`;
+                    btn.title = 'Hide dependency lines';
+                } else {
+                    btn.classList.remove('text-blue-600', 'bg-blue-100');
+                    btn.innerHTML = `<i data-lucide="unlink" class="w-5 h-5"></i>`;
+                    btn.title = 'Show dependency lines';
+                }
+                lucide.createIcons();
+            };
+
+            const updateSortButtonUI = () => {
+                const btn = document.getElementById('sortTaskBtn');
+                if (!btn) return;
+                if (sortMode === 'category') {
+                    btn.innerHTML = `<i data-lucide="calendar-days" class="w-5 h-5"></i>`;
+                    btn.title = 'Sort by date';
+                } else { // sortMode is 'date'
+                    btn.innerHTML = `<i data-lucide="folder-kanban" class="w-5 h-5"></i>`;
+                    btn.title = 'Sort by category';
+                }
+                lucide.createIcons();
+            };
+            
+            const renderDependencies = (timelineDates, dayWidth, taskIndexMap) => {
+                dependencyLinesSvg.innerHTML = '';
+                if (!showDependencies || !timelineDates || timelineDates.length === 0) return;
+
+                const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+                defs.innerHTML = `<marker id="arrowhead" viewBox="0 -5 10 10" refX="8" refY="0" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,-5L10,0L0,5" fill="#555"></path></marker>`;
+                dependencyLinesSvg.appendChild(defs);
+
+                const timelineWidth = timelineDates.length * dayWidth;
+                const daysPerColumn = timelineViewMode === 'week' ? 7 : 1;
+                
+                const allItems = [...tasks, ...milestones];
+
+                allItems.forEach((item) => {
+                    if (!item.dependencies || item.dependencies.length === 0) return;
+
+                    let sx = 0, sy = 0;
+                    const isSuccessorTask = 'start' in item;
+
+                    // Calculate successor (arrow end) coordinates
+                    if (isSuccessorTask) {
+                        const succIndex = taskIndexMap.get(item.id);
+                        if (succIndex === undefined) return;
+                        const succStart = new Date(item.start);
+                        
+                        if (item.isMilestone) {
+                            // Point to the center of the milestone diamond
+                            sx = ((getDayDiff(timelineDates[0], succStart) / daysPerColumn) * dayWidth) + (dayWidth / (daysPerColumn * 2));
+                            sy = (succIndex * TASK_ROW_HEIGHT) + 32;
+                        } else {
+                            // Point to the start of the task bar
+                            sx = (getDayDiff(timelineDates[0], succStart) / daysPerColumn) * dayWidth;
+                            sy = (succIndex * TASK_ROW_HEIGHT) + (TASK_ROW_HEIGHT / 2);
+                        }
+                    } else { // Successor is a Milestone
+                        const succDate = new Date(item.date);
+                        sx = ((getDayDiff(timelineDates[0], succDate) + 0.5) / daysPerColumn) * dayWidth;
+                        sy = -30; // Relative to timelineBody
+                    }
+
+                    item.dependencies.forEach((depString) => {
+                        if (typeof depString !== 'string') return;
+                        const [type, idStr] = depString.split('-');
+                        const id = parseInt(idStr);
+                        
+                        let pred = null;
+                        let px = 0, py = 0;
+
+                        // Calculate predecessor (arrow start) coordinates
+                        if (type === 'task') {
+                            pred = tasks.find(p => p.id === id);
+                            if (pred) {
+                                const predIndex = taskIndexMap.get(id);
+                                if (predIndex !== undefined) {
+                                    if (pred.isMilestone) {
+                                        // Start from the center of the milestone diamond
+                                        const predDate = new Date(pred.start);
+                                        px = ((getDayDiff(timelineDates[0], predDate) / daysPerColumn) * dayWidth) + (dayWidth / (daysPerColumn * 2));
+                                        py = (predIndex * TASK_ROW_HEIGHT) + 32;
+                                    } else {
+                                        // Start from the end of the task bar
+                                        const predEnd = new Date(pred.end);
+                                        px = ((getDayDiff(timelineDates[0], predEnd) + 1) / daysPerColumn) * dayWidth;
+                                        py = (predIndex * TASK_ROW_HEIGHT) + (TASK_ROW_HEIGHT / 2);
+                                    }
+                                }
+                            }
+                        } else if (type === 'milestone') {
+                            pred = milestones.find(m => m.id === id);
+                            if (pred) {
+                                const predDate = new Date(pred.date);
+                                px = ((getDayDiff(timelineDates[0], predDate) + 0.5) / daysPerColumn) * dayWidth;
+                                py = -30; // Relative to timelineBody
+                            }
+                        }
+                        
+                        if (pred && px >= 0 && sx <= timelineWidth) {
+                            const isPredecessorTask = (type === 'task');
+                            const isLinkBetweenTaskAndMilestone = (isSuccessorTask && !isPredecessorTask) || (!isSuccessorTask && isPredecessorTask);
+
+                            if (isLinkBetweenTaskAndMilestone) {
+                                return; // Skip drawing line between task and milestone
+                            }
+
+                            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                            let d;
+                            const offset = 40;
+                           if (py < sy) { // Up to Down or Milestone to Task
+                               d = `M ${px} ${py} C ${px} ${py + offset}, ${sx} ${sy - offset}, ${sx} ${sy}`;
+                            } else if (py > sy) { // Down to Up (Task to Milestone)
+                               d = `M ${px} ${py} C ${px} ${py - offset}, ${sx} ${sy + offset}, ${sx} ${sy}`;
+                            } else { // Same level
+                                d = `M ${px} ${py} C ${px + offset} ${py}, ${sx - offset} ${sy}, ${sx} ${sy}`;
+                            }
+                            path.setAttribute('d', d);
+                            path.setAttribute('stroke', '#555');
+                            path.setAttribute('stroke-width', '1.5');
+                            path.setAttribute('fill', 'none');
+                            path.setAttribute('marker-end', 'url(#arrowhead)');
+                            dependencyLinesSvg.appendChild(path);
+                        }
+                    });
+                });
+            };
+
+            const renderMilestones = (timelineDates, dayWidth) => {
+                const milestoneTrackEl = document.getElementById('milestoneTrack');
+                milestoneTrackEl.innerHTML = '';
+                if (!timelineDates || timelineDates.length === 0) return;
+
+                const timelineStart = timelineDates[0];
+                const totalTimelineBodyHeight = MILESTONE_TRACK_HEIGHT + (tasks.length * TASK_ROW_HEIGHT);
+                const daysPerColumn = timelineViewMode === 'week' ? 7 : 1;
+                
+                milestones.forEach(milestone => {
+                    const milestoneDate = new Date(milestone.date);
+                    const offset = getDayDiff(timelineStart, milestoneDate);
+                    const leftPos = (offset / daysPerColumn) * dayWidth + (dayWidth / (daysPerColumn * 2));
+                    const color = milestone.color || '#333333';
+
+                    const markerHeader = document.createElement('div');
+                    markerHeader.className = 'absolute milestone-marker';
+                    markerHeader.dataset.id = milestone.id;
+                    markerHeader.style.left = `${leftPos}px`;
+                    markerHeader.style.top = `0px`;
+                    markerHeader.style.height = `${MILESTONE_TRACK_HEIGHT}px`;
+                    
+                    const labelTopStyle = (milestone.labelPosition === 'top') ? `top: 5px;` : `top: 40px;`;
+                    const dateLabelStyle = milestone.dateLabelPosition === 'left' ? `right: 15px;` : `left: 15px;`;
+                    
+                    markerHeader.innerHTML = `
+                        <div class="gantt-milestone" style="top: 30px; background-color: ${color}; ${milestone.isLocked ? 'cursor: pointer;' : 'cursor: grab;'}">
+                             ${milestone.isLocked ? `<div class="absolute w-full h-full bg-black bg-opacity-20 z-10 pointer-events-none"></div>` : ''}
+                        </div>
+                        <div class="milestone-label" style="${labelTopStyle}">${milestone.name}</div>
+                        <div class="milestone-date-label" style="${dateLabelStyle}">${formatDateShort(milestone.date)}</div>
+                    `;
+
+                    const milestoneSymbol = markerHeader.querySelector('.gantt-milestone');
+                    milestoneSymbol.addEventListener('mousedown', (e) => onMilestoneMoveStart(e, milestone));
+                    milestoneSymbol.addEventListener('click', (e) => {
+                        if (!milestoneDidMove) {
+                            openMilestoneModal();
+                        }
+                    });
+
+                    markerHeader.querySelector('.milestone-label').addEventListener('click', (e) => toggleMilestoneLabelPosition(e, milestone));
+                    markerHeader.querySelector('.milestone-date-label').addEventListener('click', (e) => toggleMilestoneDateLabelPosition(e, milestone));
+                    milestoneTrackEl.appendChild(markerHeader);
+                });
+            };
+
+            const updateTodayLinePosition = () => {
+                const todayLine = document.getElementById('today-line-marker');
+                if (!todayLine || currentTimelineDates.length === 0) return;
+
+                const now = new Date();
+                const todayStr = fmt(now);
+                
+                const timelineStartDate = new Date(currentTimelineDates[0].toDateString());
+
+                if(now >= timelineStartDate && now <= currentTimelineDates[currentTimelineDates.length - 1]) {
+                    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    const secondsInDay = 24 * 60 * 60;
+                    const secondsPassed = (now.getTime() - startOfDay.getTime()) / 1000;
+                    const fractionOfDay = secondsPassed / secondsInDay;
+                    
+                    const dayDiff = getDayDiff(timelineStartDate, startOfDay);
+                    
+                    const daysPerColumn = timelineViewMode === 'week' ? 7 : 1;
+                    const leftPosition = ((dayDiff + fractionOfDay) / daysPerColumn) * dayWidth;
+
+                    todayLine.style.left = `${leftPosition}px`;
+                    todayLine.style.top = `0px`; 
+                    todayLine.style.height = `${timelineBody.offsetHeight}px`; 
+                    todayLine.style.display = 'block';
+                } else {
+                    todayLine.style.display = 'none';
+                }
+            };
+            
+            const sortTasks = () => {
+                 if (sortMode === 'category') {
+                    const map = categoryOrder.reduce((acc, cat, idx) => (acc[cat.name] = idx, acc), {});
+                    tasks.sort((a,b) => {
+                        const ia = map[a.category] ?? 9999; const ib = map[b.category] ?? 9999;
+                        if (ia !== ib) return ia - ib;
+                        return new Date(a.start) - new Date(b.start);
+                    });
+                } else if (sortMode === 'date') {
+                    tasks.sort((a,b) => new Date(a.start) - new Date(b.start));
+                }
+            };
+
+            const render = () => {
+                const taskIndexMap = new Map(); tasks.forEach((t,i)=>taskIndexMap.set(t.id,i)); currentTaskIndexMap = taskIndexMap;
+
+                let timelineDates = [];
+                if (tasks.length > 0 || milestones.length > 0) {
+                    const taskDates = tasks.flatMap(t => [new Date(t.start), new Date(t.end)]);
+                    const milestoneDates = milestones.map(m => new Date(m.date));
+                    const allDates = [...taskDates, ...milestoneDates, new Date()];
+                    
+                    const minDate = new Date(Math.min.apply(null, allDates));
+                    const maxDate = new Date(Math.max.apply(null, allDates));
+
+                    let timelineStart = new Date(minDate);
+                    timelineStart.setDate(timelineStart.getDate() - 7); // Go back 1 week
+                    timelineStart.setDate(timelineStart.getDate() - (timelineStart.getDay() + 6) % 7); // Find Monday
+
+                    let timelineEnd = new Date(maxDate);
+                    timelineEnd.setDate(timelineEnd.getDate() + 7); // Go forward 1 week
+                    timelineEnd.setDate(timelineEnd.getDate() + (7 - timelineEnd.getDay()) % 7); // Find Sunday
+                    
+                    let cur = new Date(timelineStart);
+
+                    if (timelineViewMode === 'day') {
+                        while (cur <= timelineEnd) {
+                            timelineDates.push(new Date(cur));
+                            cur.setDate(cur.getDate() + 1);
+                        }
+                    } else { // 'week' view
+                        while (cur <= timelineEnd) {
+                            timelineDates.push(new Date(cur)); // Push the Monday
+                            cur.setDate(cur.getDate() + 7);
+                        }
+                    }
+                } else {
+                    const today = new Date();
+                    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+                    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+                    for (let d = new Date(startOfMonth); d <= endOfMonth; d.setDate(d.getDate() + 1)) {
+                        timelineDates.push(new Date(d));
+                    }
+                }
+                
+                currentTimelineDates = timelineDates;
+                
+                const totalWidth = currentTimelineDates.length * dayWidth;
+                
+                timelineHeader.style.width = `${totalWidth}px`;
+                milestoneTrack.style.width = `${totalWidth}px`;
+                timelineBody.style.width = `${totalWidth}px`;
+                
+                const totalTaskHeight = tasks.length * TASK_ROW_HEIGHT;
+                timelineBody.style.height = `${totalTaskHeight}px`;
+                dependencyLinesSvg.style.width = `${totalWidth}px`;
+                dependencyLinesSvg.style.height = `${totalTaskHeight}px`;
+                dependencyLinesSvg.setAttribute('viewBox', `0 0 ${totalWidth} ${totalTaskHeight}`);
+                
+
+                timelineHeader.innerHTML = '';
+                let processedKey = '';
+                timelineDates.forEach((date, i) => {
+                    const key = `${date.getFullYear()}-${date.getMonth()}`;
+                    if (key !== processedKey) {
+                        const daysInThisMonthOnTimeline = timelineDates.filter(d => d.getFullYear()===date.getFullYear() && d.getMonth()===date.getMonth()).length;
+                        const monthName = date.toLocaleDateString('en-US',{ month:'long', year:'numeric' });
+                        timelineHeader.innerHTML += `<div class="absolute top-0 text-center font-semibold text-sm p-1 border-b border-r border-gray-200 text-gray-600 truncate" style="left:${i*dayWidth}px;width:${daysInThisMonthOnTimeline*dayWidth}px;z-index:1;">${monthName}</div>`;
+                        processedKey = key;
+                    }
+                    const dateStr = fmt(date);
+                    const isToday = dateStr === fmt(new Date());
+                    const isHoliday = holidays.includes(dateStr);
+                    const dayLetter = date.toLocaleDateString('en-US', { weekday: 'short' })[0];
+                    const holidayClass = isHoliday && timelineViewMode === 'day' ? 'holiday-highlight' : '';
+                    
+                    if (timelineViewMode === 'day') {
+                        timelineHeader.innerHTML += `<div class="absolute bottom-0 text-center text-gray-500 ${holidayClass}" style="left:${i*dayWidth}px;width:${dayWidth}px;height:50%;"><div class="flex flex-col justify-center h-full"><span class="text-sm font-semibold ${isToday ? 'text-red-600 font-bold' : ''}">${date.getDate()}</span><span class="text-xs ${isToday ? 'text-red-600 font-bold' : ''}">${dayLetter}</span></div></div>`;
+                    } else {
+                        timelineHeader.innerHTML += `<div class="absolute bottom-0 text-center text-gray-500" style="left:${i*dayWidth}px;width:${dayWidth}px;height:50%;"><div class="flex flex-col justify-center h-full"><span class="text-sm font-semibold ${isToday ? 'text-red-600 font-bold' : ''}">${date.getDate()}</span></div></div>`;
+                    }
+                });
+
+                // Clear previous contents
+                taskListBody.innerHTML = '';
+                const gridContainer = document.createElement('div');
+                timelineBody.innerHTML = ''; // Clear everything
+                timelineBody.appendChild(gridContainer);
+                
+                tasks.forEach((task, idx) => {
+                    const taskItem = document.createElement('div');
+                    taskItem.className = 'task-list-item flex items-center justify-between px-4 border-b border-gray-200 text-sm group';
+
+                    const colorHsl = getCategoryColor(task.category);
+                    const initials = (task.incharge || '..').split(' ').map(n=>n[0]).join('').substring(0,2);
+                    
+                    let durationText;
+                    if (task.isMilestone) {
+                        durationText = '';
+                    } else {
+                        if (timelineViewMode === 'week') {
+                            const totalDays = calculateTotalDays(task.start, task.end);
+                            const weeks = calculateWeeksWithPrecision(totalDays);
+                            durationText = `${weeks}w`;
+                        } else { // 'day' view
+                            const workingDays = calculateWorkingDays(task.start, task.end);
+                            durationText = `${workingDays}d`;
+                        }
+                    }
+                    const percentText = task.isMilestone ? '' : `(${task.percentComplete || 0}%)`;
+                    const rightColumnText = task.isMilestone ? '' : `<div class="task-duration-display text-right text-gray-500 text-xs font-medium" data-task-id-duration="${task.id}">${durationText} ${percentText}</div>`;
+                    const noteIconHTML = task.note && task.note.trim() !== ''
+                        ? `<i data-lucide="file-text" class="w-4 h-4 text-gray-500 note-icon-with-tooltip" data-note="${task.note.replace(/"/g, '&quot;')}" title="View/Edit Note"></i>`
+                        : `<i data-lucide="file-plus-2" class="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100" title="Add Note"></i>`;
+
+
+                    let detailsHTML = `<div class="flex items-center justify-between w-full mt-1">`;
+                    detailsHTML += `<div class="flex items-center gap-2 min-w-0">`; // Left group
+                    if (task.category) {
+                        detailsHTML += `<span class="text-xs px-1.5 py-0.5 rounded-full self-start truncate max-w-[3rem] hover:max-w-40 transition-all" style="background-color:${colorHsl};color:white;" title="${task.category}">${task.category}</span>`;
+                    }
+                    if (task.incharge) {
+                        const initials = (task.incharge).split(' ').map(n=>n[0]).join('').substring(0,2);
+                        detailsHTML += `<span class="w-5 h-5 rounded-full text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0" style="background-color: ${stringToHslColor(task.incharge)};" title="${task.incharge}">${initials}</span>`;
+                        detailsHTML += `<span class="text-xs text-gray-500 truncate">${task.incharge}</span>`;
+                    }
+                    detailsHTML += `</div>`; // End Left group
+                    detailsHTML += rightColumnText; // Add right column text
+                    detailsHTML += `</div>`;
+
+                    taskItem.innerHTML = `
+                        <div class="flex-1 flex flex-col py-1.5 truncate">
+                             <div class="flex items-center gap-2">
+                                <span class="truncate font-medium">${task.name}</span>
+                                <span class="note-icon-container cursor-pointer flex-shrink-0" data-id="${task.id}">${noteIconHTML}</span>
+                            </div>
+                            ${detailsHTML}
+                        </div>
+                        <div class="flex items-center pl-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button class="lock-task-btn p-1" data-id="${task.id}" title="${task.isLocked ? 'Unlock task' : 'Lock task'}">
+                                <i data-lucide="${task.isLocked ? 'lock' : 'unlock'}" class="w-4 h-4 ${task.isLocked ? 'text-red-500 hover:text-red-700' : 'text-gray-500 hover:text-gray-700'}"></i>
+                            </button>
+                            <button class="edit-task-btn p-1 text-gray-500 hover:text-blue-600" data-id="${task.id}"><i data-lucide="edit-2" class="w-4 h-4"></i></button>
+                        </div>
+                    `;
+                    taskListBody.appendChild(taskItem);
+
+                        const rowGrid = document.createElement('div');
+                        rowGrid.className = 'absolute w-full border-b border-gray-200';
+                        const topOffset = idx * TASK_ROW_HEIGHT;
+                        rowGrid.style.top = `${topOffset}px`;
+                        rowGrid.style.height = `${TASK_ROW_HEIGHT}px`;
+                        
+                        let rowGridHTML = '';
+                        timelineDates.forEach((d, i) => {
+                            const dateStr = fmt(d);
+                            const isHoliday = holidays.includes(dateStr);
+                            const holidayClass = isHoliday && timelineViewMode === 'day' ? 'holiday-highlight' : '';
+                            rowGridHTML += `<div class="absolute h-full gantt-grid-line ${holidayClass}" style="left:${i*dayWidth}px;width:${dayWidth}px;"></div>`;
+                        });
+                        rowGrid.innerHTML = rowGridHTML;
+                        gridContainer.appendChild(rowGrid);
+                    
+                    const tStart = new Date(task.start), tEnd = new Date(task.end);
+                    const timelineStart = timelineDates[0], timelineEnd = timelineDates[timelineDates.length-1];
+                    if (tStart <= timelineEnd && tEnd >= timelineStart) {
+                        const startOffset = Math.max(0, getDayDiff(timelineStart, tStart));
+                        const daysPerColumn = timelineViewMode === 'week' ? 7 : 1;
+                        
+                        const barContainer = document.createElement('div');
+                        barContainer.className = 'absolute task-container';
+                        barContainer.style.top = `${topOffset}px`;
+                        barContainer.dataset.id = task.id;
+
+                        if (task.isMilestone) {
+                            const barLeft = (startOffset / daysPerColumn) * dayWidth + (dayWidth / (daysPerColumn * 2));
+                            barContainer.style.left = `${barLeft}px`;
+
+                            barContainer.innerHTML = `
+                                <div class="task-bar-label" style="top: 5px; transform: translateX(-50%);">${task.name}</div>
+                                <div class="gantt-milestone" style="top: 32px; background-color: ${colorHsl}; ${task.isLocked ? 'cursor: pointer;' : 'cursor: grab;'}">
+                                    ${task.isLocked ? `<div class="absolute w-full h-full bg-black bg-opacity-20 z-10 pointer-events-none"></div>` : ''}
+                                </div>
+                                <div class="task-date-label" style="top: 45px; transform: translateX(-50%); left: 0;">${formatDateShort(task.start)}</div>
+                            `;
+                            
+                            const bar = barContainer.querySelector('.gantt-milestone');
+                            bar.addEventListener('mousedown', (e) => onMouseDown(e, task));
+                            bar.addEventListener('click', (e) => { if (!isDragging) openModal({taskId: task.id}); });
+                            
+                            timelineBody.appendChild(barContainer);
+                        } else {
+                            const duration = Math.max(1, getDayDiff(tStart, tEnd) + 1);
+                            const barWidth = (duration / daysPerColumn) * dayWidth;
+                            const barLeft = (startOffset / daysPerColumn) * dayWidth;
+
+                            barContainer.style.left = `${barLeft}px`;
+                            barContainer.style.width = `${barWidth}px`;
+                            
+                            const startDateLabelHTML = task.start !== task.end ? `<div class="task-date-label task-date-start" style="right: 100%; margin-right: 8px;">${formatDateShort(task.start)}</div>` : '';
+
+                            barContainer.innerHTML = `
+                                <div class="task-bar-label" style="top: 5px;">${task.name}</div>
+                                ${startDateLabelHTML}
+                                <div class="gantt-task-bar" style="width: 100%; height: 12px; top: 25px; background-color: #ffffff; border: 1px solid ${colorHsl}; ${task.isLocked ? 'cursor: pointer;' : 'cursor: grab;'}">
+                                    ${task.isLocked ? `<div class="absolute inset-0 bg-black bg-opacity-10 z-10 pointer-events-none"></div><i data-lucide="lock" class="w-3 h-3 absolute left-1.5 top-1/2 -translate-y-1/2 text-white z-20 pointer-events-none"></i>` : ''}
+                                    <div class="task-bar-progress" style="width:${task.percentComplete || 0}%;background-color:${colorHsl};"></div>
+                                    <div class="resize-handle resize-handle-left"></div>
+                                    <div class="resize-handle resize-handle-right"></div>
+                                </div>
+                                <div class="task-date-label task-date-end" style="left: 100%; margin-left: 8px;">${formatDateShort(task.end)}</div>
+                            `;
+                            
+                            const bar = barContainer.querySelector('.gantt-task-bar');
+                            bar.addEventListener('mousedown', (e) => onMouseDown(e, task));
+                            bar.addEventListener('click', (e) => { if (!e.target.classList.contains('resize-handle') && !isDragging) openModal({taskId: task.id}); });
+
+                            timelineBody.appendChild(barContainer);
+                        }
+                    }
+                });
+
+                timelineBody.appendChild(dependencyLinesSvg);
+                // Draw milestone lines in the body container after grid lines and before tasks
+                milestones.forEach(milestone => {
+                    const timelineStart = currentTimelineDates[0];
+                    const daysPerColumn = timelineViewMode === 'week' ? 7 : 1;
+                    const milestoneDate = new Date(milestone.date);
+                    const offset = getDayDiff(timelineStart, milestoneDate);
+                    const leftPos = (offset / daysPerColumn) * dayWidth + (dayWidth / (daysPerColumn * 2));
+                    const color = milestone.color || '#333333';
+                    const totalTaskHeight = tasks.length * TASK_ROW_HEIGHT;
+                    
+                    const lineHeightInBody = totalTaskHeight;
+
+                    const lineMarker = document.createElement('div');
+                    lineMarker.className = 'absolute milestone-line-marker';
+                    lineMarker.dataset.id = milestone.id;
+                    lineMarker.style.left = `${leftPos}px`;
+                    lineMarker.style.top = `0px`;
+                    lineMarker.style.height = `${lineHeightInBody}px`;
+                    lineMarker.style.zIndex = `11`;
+
+                    lineMarker.innerHTML = `
+                        <div class="milestone-line" style="height: 100%; border-left-color: ${color};"></div>
+                    `;
+                    gridContainer.appendChild(lineMarker);
+                });
+
+
+                const oldLine = document.getElementById('today-line-marker');
+                if(oldLine) oldLine.remove();
+
+                const todayLine = document.createElement('div');
+                todayLine.id = 'today-line-marker';
+                todayLine.className = 'absolute top-0 w-0.5 bg-red-500 z-[5] pointer-events-none';
+                timelineBody.appendChild(todayLine);
+                updateTodayLinePosition();
+                
+                renderMilestones(timelineDates, dayWidth);
+                renderDependencies(currentTimelineDates, dayWidth, currentTaskIndexMap);
+                renderDashboard();
+                updateDashboardVisibility();
+                lucide.createIcons();
+            };
+            
+            const renderDashboard = () => {
+                const dashboardEl = document.getElementById('categoryLegend');
+                if (!dashboardEl) return;
+
+                const nonMilestoneTasks = tasks.filter(t => !t.isMilestone && !t.id.toString().startsWith('cat-'));
+                
+                if (nonMilestoneTasks.length === 0) {
+                    dashboardEl.innerHTML = `<div class="text-center text-gray-500 p-4">No tasks to display. Please add tasks to see the dashboard.</div>`;
+                    dashboardEl.className = 'p-4 border-b border-gray-200 bg-white';
+                    return;
+                }
+
+                // Overall Progress
+                const totalProgress = nonMilestoneTasks.reduce((acc, t) => acc + (t.percentComplete || 0), 0);
+                const overallProgress = nonMilestoneTasks.length > 0 ? Math.round(totalProgress / nonMilestoneTasks.length) : 0;
+
+                // Progress by Category
+                const progressByCategory = categoryOrder.map(cat => {
+                    const catTasks = nonMilestoneTasks.filter(t => t.category === cat.name);
+                    if (catTasks.length === 0) return null;
+                    const catTotalProgress = catTasks.reduce((acc, t) => acc + (t.percentComplete || 0), 0);
+                    return {
+                        name: cat.name,
+                        color: cat.color,
+                        imageUrl: cat.imageUrl,
+                        progress: Math.round(catTotalProgress / catTasks.length),
+                        taskCount: catTasks.length
+                    };
+                }).filter(Boolean);
+
+                // Progress by Incharge
+                const inchargeNames = [...new Set(nonMilestoneTasks.map(t => t.incharge).filter(Boolean))];
+                const progressByIncharge = inchargeNames.map(name => {
+                    const personTasks = nonMilestoneTasks.filter(t => t.incharge === name);
+                    if (personTasks.length === 0) return null;
+                    const personTotalProgress = personTasks.reduce((acc, t) => acc + (t.percentComplete || 0), 0);
+                    return {
+                        name: name,
+                        progress: Math.round(personTotalProgress / personTasks.length),
+                        taskCount: personTasks.length
+                    };
+                }).filter(Boolean).sort((a, b) => {
+                    if (b.taskCount !== a.taskCount) {
+                        return b.taskCount - a.taskCount;
+                    }
+                    return a.name.localeCompare(b.name);
+                });
+
+
+                // HTML Generation
+                dashboardEl.className = 'grid grid-cols-3 gap-4 p-4 border-b border-gray-200 bg-gray-50';
+                
+                const overallHTML = `
+                <div class="bg-white p-4 rounded-lg border">
+                  <h4 class="font-semibold text-gray-600 mb-3 text-sm">Overall Project Progress</h4>
+                  <div class="flex items-center justify-center gap-4">
+                    <div class="relative w-24 h-24 overall-chart-container">
+                      <svg class="w-full h-full" viewBox="0 0 36 36" transform="rotate(-90)"><circle cx="18" cy="18" r="15.9155" fill="none" stroke="#e6e6e6" stroke-width="3"></circle><circle class="progress-ring__circle" cx="18" cy="18" r="15.9155" fill="none" stroke="#4c51bf" stroke-width="3" stroke-dasharray="${overallProgress}, 100" stroke-linecap="round"></circle></svg>
+                      <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-xl font-bold text-gray-700">${overallProgress}%</div>
+                    </div>
+                    <div class="text-sm">
+                      <div class="font-semibold">${nonMilestoneTasks.length} Tasks</div>
+                      <div class="text-gray-500">Total</div>
+                    </div>
+                  </div>
+                </div>`;
+
+                let categoryHTML = `
+                <div class="bg-white p-4 rounded-lg border">
+                  <h4 class="font-semibold text-gray-600 mb-3 text-sm">Progress by Category</h4>
+                  <div class="space-y-2 max-h-40 overflow-y-auto pr-2">`;
+                progressByCategory.forEach(cat => {
+                    let imagePreviewHTML = '';
+                    if (cat.imageUrl) {
+                        imagePreviewHTML = `
+                            <div class="category-image-preview-container ml-2">
+                                <img src="${cat.imageUrl}" class="w-6 h-6 rounded-full object-cover border border-white shadow-sm" onerror="this.style.display='none'">
+                            </div>
+                        `;
+                    }
+
+                    categoryHTML += `
+                    <div class="text-xs">
+                      <div class="flex justify-between mb-1 items-center">
+                        <span class="font-medium flex items-center truncate">
+                            <span class="w-2 h-2 rounded-full mr-2 flex-shrink-0" style="background-color: ${cat.color};"></span>
+                            <span class="truncate">${cat.name}</span>
+                            ${imagePreviewHTML}
+                        </span>
+                        <span class="text-gray-500 font-semibold">${cat.progress}%</span>
+                      </div>
+                      <div class="w-full bg-gray-200 rounded-full h-1.5"><div class="h-1.5 rounded-full" style="width: ${cat.progress}%; background-color: ${cat.color};"></div></div>
+                    </div>`;
+                });
+                categoryHTML += `</div></div>`;
+
+                let inchargeHTML = `
+                <div class="bg-white p-4 rounded-lg border">
+                  <h4 class="font-semibold text-gray-600 mb-3 text-sm">Progress by Incharge</h4>
+                  <div class="space-y-2 max-h-40 overflow-y-auto pr-2">`;
+                progressByIncharge.forEach(person => {
+                    const initials = (person.name || '..').split(' ').map(n=>n[0]).join('').substring(0,2);
+                    const avatar = `<span class="w-6 h-6 rounded-full text-white flex items-center justify-center text-xs font-bold" style="background-color: ${stringToHslColor(person.name)};">${initials}</span>`;
+                    inchargeHTML += `
+                    <div class="flex items-center gap-2 text-xs">
+                      ${avatar}
+                      <div class="flex-1 min-w-0">
+                        <div class="flex justify-between mb-1 items-center">
+                          <span class="font-medium truncate">${person.name} (${person.taskCount})</span>
+                          <span class="text-gray-500 font-semibold">${person.progress}%</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-1.5"><div class="bg-green-500 h-1.5 rounded-full" style="width: ${person.progress}%;"></div></div>
+                      </div>
+                    </div>`;
+                });
+                inchargeHTML += `</div></div>`;
+
+                dashboardEl.innerHTML = overallHTML + categoryHTML + inchargeHTML;
+
+                const imageHoverPreviewEl = document.getElementById('imageHoverPreview');
+                if (imageHoverPreviewEl) {
+                    const previewContainers = dashboardEl.querySelectorAll('.category-image-preview-container');
+                    previewContainers.forEach(container => {
+                        container.addEventListener('mouseenter', (e) => {
+                            const smallImg = container.querySelector('img');
+                            if (smallImg && smallImg.src) {
+                                imageHoverPreviewEl.src = smallImg.src;
+                                
+                                const rect = container.getBoundingClientRect();
+                                const previewWidth = 128;
+                                const previewHeight = 128;
+                                
+                                // Position above the small icon
+                                let top = rect.top - previewHeight - 10;
+                                let left = rect.left + (rect.width / 2) - (previewWidth / 2);
+
+                                // Adjust if it goes off-screen
+                                if (top < 10) { // If it goes off the top, place it below
+                                    top = rect.bottom + 10;
+                                }
+                                if (left < 10) { // Adjust left
+                                    left = 10;
+                                }
+                                if (left + previewWidth > window.innerWidth - 10) { // Adjust right
+                                    left = window.innerWidth - previewWidth - 10;
+                                }
+                                
+                                imageHoverPreviewEl.style.top = `${top}px`;
+                                imageHoverPreviewEl.style.left = `${left}px`;
+                                
+                                imageHoverPreviewEl.classList.remove('hidden');
+                            }
+                        });
+                        container.addEventListener('mouseleave', () => {
+                            imageHoverPreviewEl.classList.add('hidden');
+                        });
+                    });
+                }
+            };
+
+            const updateDashboardVisibility = () => {
+                const dashboardEl = document.getElementById('categoryLegend');
+                const toggleBtn = document.getElementById('toggleDashboardBtn');
+                if (!dashboardEl || !toggleBtn) return;
+
+                if (isDashboardVisible) {
+                    dashboardEl.classList.remove('hidden');
+                    toggleBtn.title = 'Hide Dashboard';
+                    toggleBtn.classList.add('text-blue-600', 'bg-blue-100');
+                } else {
+                    dashboardEl.classList.add('hidden');
+                    toggleBtn.title = 'Show Dashboard';
+                    toggleBtn.classList.remove('text-blue-600', 'bg-blue-100');
+                }
+            };
+
+            const setupCategoryCombobox = () => {
+                const container = document.getElementById('category-combobox-container');
+                const input = document.getElementById('taskCategory');
+                const button = document.getElementById('category-combobox-button');
+                const optionsContainer = document.getElementById('category-combobox-options');
+
+                // This function is called every time the modal opens. Listeners on input/button might stack.
+                // For this simple case it's acceptable, but in a larger app, listener cleanup would be needed.
+                const populateOptions = (filter = '') => {
+                    optionsContainer.innerHTML = '';
+                    const filteredCategories = categoryOrder.filter(c => c.name.toLowerCase().includes(filter.toLowerCase()));
+                    
+                    filteredCategories.forEach(cat => {
+                        const option = document.createElement('div');
+                        option.className = 'cursor-pointer select-none relative py-2 pl-3 pr-9 text-gray-900 hover:bg-blue-100';
+                        option.textContent = cat.name;
+                        option.dataset.value = cat.name;
+                        option.addEventListener('click', () => {
+                            input.value = cat.name;
+                            optionsContainer.classList.add('hidden');
+                        });
+                        optionsContainer.appendChild(option);
+                    });
+                     
+                    if (filter && !filteredCategories.some(c => c.name.toLowerCase() === filter.toLowerCase())) {
+                        const createOption = document.createElement('div');
+                        createOption.className = 'cursor-pointer select-none relative py-2 pl-3 pr-9 text-gray-900 hover:bg-blue-100';
+                        createOption.innerHTML = `Create "<span class="font-bold">${filter}</span>"`;
+                        createOption.addEventListener('click', () => {
+                            input.value = filter;
+                            optionsContainer.classList.add('hidden');
+                        });
+                        optionsContainer.appendChild(createOption);
+                    }
+                };
+                
+                const toggleOptions = () => {
+                     const isHidden = optionsContainer.classList.contains('hidden');
+                     if(isHidden) {
+                        populateOptions(input.value);
+                        optionsContainer.classList.remove('hidden');
+                     } else {
+                        optionsContainer.classList.add('hidden');
+                     }
+                };
+                
+                const openOptions = () => {
+                    populateOptions(input.value);
+                    optionsContainer.classList.remove('hidden');
+                };
+
+                input.addEventListener('focus', openOptions);
+                input.addEventListener('input', openOptions);
+                button.addEventListener('click', (e) => {
+                    e.stopPropagation(); 
+                    toggleOptions();
+                });
+
+                // Add a global listener to close the dropdown, but only add it once.
+                if (!isComboboxListenerActive) {
+                    document.addEventListener('click', (e) => {
+                        const modal = document.getElementById('taskModal');
+                        // Only perform check if the task modal is actually open
+                        if (!modal.classList.contains('hidden')) {
+                            const currentContainer = document.getElementById('category-combobox-container');
+                            const currentOptions = document.getElementById('category-combobox-options');
+                            if (currentContainer && !currentContainer.contains(e.target)) {
+                                currentOptions.classList.add('hidden');
+                            }
+                        }
+                    });
+                    isComboboxListenerActive = true;
+                }
+            };
+
+            // ---- Modal helpers ----
+            const taskModal = document.getElementById('taskModal');
+            const openModal = (options = {}) => {
+                const { taskId = null, category = '' } = options;
+                const form = document.getElementById('taskForm'); form.reset();
+                const dependenciesSelect = document.getElementById('dependencies'); 
+                dependenciesSelect.innerHTML = '';
+                
+                tasks.forEach(t => { 
+                    if (!taskId || t.id !== taskId) { 
+                        const opt = document.createElement('option'); 
+                        opt.value = `task-${t.id}`; 
+                        opt.textContent = `${t.name} (${t.category || 'Uncategorized'})`; 
+                        dependenciesSelect.appendChild(opt); 
+                    } 
+                });
+
+                const modalTitle = document.getElementById('modalTitle');
+                const taskIdInput = document.getElementById('taskId');
+                const taskNameInput = document.getElementById('taskName');
+                const taskCategoryInput = document.getElementById('taskCategory');
+                const taskInChargeInput = document.getElementById('taskInCharge');
+                const startDateInput = document.getElementById('startDate');
+                const endDateInput = document.getElementById('endDate');
+                const percentCompleteInput = document.getElementById('percentComplete');
+                const percentCompleteValue = document.getElementById('percentCompleteValue');
+                const deleteTaskBtn = document.getElementById('deleteTaskBtn');
+                const isMilestoneCheckbox = document.getElementById('isMilestone');
+                const taskNoteInput = document.getElementById('taskNote');
+
+                if (taskId) {
+                    const t = tasks.find(x => x.id === taskId);
+                    modalTitle.textContent = 'Edit Task';
+                    taskIdInput.value = t.id; taskNameInput.value = t.name; taskCategoryInput.value = t.category || '';
+                    taskInChargeInput.value = t.incharge || '';
+                    startDateInput.value = t.start; endDateInput.value = t.end; percentCompleteInput.value = t.percentComplete || 0; percentCompleteValue.textContent = `${t.percentComplete || 0}%`;
+                    taskNoteInput.value = t.note || '';
+                    isMilestoneCheckbox.checked = t.isMilestone || false;
+                    if (t.dependencies) {
+                        t.dependencies.forEach(idString => { 
+                            const opt = dependenciesSelect.querySelector(`option[value="${idString}"]`); 
+                            if (opt) opt.selected = true; 
+                        });
+                    }
+                    deleteTaskBtn.classList.remove('hidden');
+                } else {
+                    modalTitle.textContent = 'Add New Task';
+                    taskIdInput.value = ''; 
+                    taskCategoryInput.value = category || ''; 
+                    percentCompleteInput.value = 0; 
+                    percentCompleteValue.textContent = '0%';
+                    const todayStr = fmt(new Date());
+                    startDateInput.value = todayStr;
+                    endDateInput.value = todayStr;
+                    taskNoteInput.value = '';
+                    isMilestoneCheckbox.checked = false;
+                    deleteTaskBtn.classList.add('hidden');
+                }
+                
+                const toggleMilestoneUI = (isMilestone) => {
+                    document.getElementById('endDateContainer').style.display = isMilestone ? 'none' : 'block';
+                    document.getElementById('percentCompleteContainer').style.display = isMilestone ? 'none' : 'block';
+                    document.getElementById('startDateLabel').textContent = isMilestone ? 'Date' : 'Start Date';
+                };
+
+                toggleMilestoneUI(isMilestoneCheckbox.checked);
+                isMilestoneCheckbox.onchange = () => {
+                    toggleMilestoneUI(isMilestoneCheckbox.checked);
+                    // When unchecking Is Milestone, set percent complete to 0%
+                    if (!isMilestoneCheckbox.checked) {
+                        percentCompleteInput.value = 0;
+                        percentCompleteValue.textContent = '0%';
+                    }
+                };
+
+                percentCompleteInput.oninput = () => { percentCompleteValue.textContent = `${percentCompleteInput.value}%`; };
+                percentCompleteInput.onchange = () => { percentCompleteValue.textContent = `${percentCompleteInput.value}%`; };
+                
+                setupCategoryCombobox();
+                
+                taskModal.classList.remove('hidden');
+                lucide.createIcons(); // Ensure new icons are rendered
+            };
+            const closeModal = () => {
+                taskModal.classList.add('hidden');
+                if (isAddTaskModalFromCategoryModal) {
+                    isAddTaskModalFromCategoryModal = false;
+                    openCategoryModal();
+                }
+            };
+
+            // ---- Custom Alert and Confirm Modals ----
+            let alertCallback = null;
+            let confirmCallback = null;
+
+            const showAlert = (message, title = 'Information') => {
+                return new Promise((resolve) => {
+                    document.getElementById('alertTitle').textContent = title;
+                    document.getElementById('alertMessage').textContent = message;
+                    document.getElementById('alertModal').classList.remove('hidden');
+                    alertCallback = resolve;
+                    lucide.createIcons();
+                });
+            };
+
+            const showConfirm = (message, title = 'Confirm Delete') => {
+                return new Promise((resolve) => {
+                    document.getElementById('deleteTitle').textContent = title;
+                    document.getElementById('deleteMessage').textContent = message;
+                    document.getElementById('deleteConfirmModal').classList.remove('hidden');
+                    confirmCallback = resolve;
+                    lucide.createIcons();
+                });
+            };
+            const saveTask = () => {
+                const id = document.getElementById('taskId').value ? parseInt(document.getElementById('taskId').value) : null;
+                const name = document.getElementById('taskName').value.trim();
+                const category = document.getElementById('taskCategory').value.trim();
+                const incharge = document.getElementById('taskInCharge').value.trim();
+                const start = document.getElementById('startDate').value; 
+                const isMilestone = document.getElementById('isMilestone').checked;
+                const end = isMilestone ? start : document.getElementById('endDate').value;
+                const percentComplete = isMilestone ? 100 : (parseInt(document.getElementById('percentComplete').value) || 0);
+                const dependencies = Array.from(document.getElementById('dependencies').selectedOptions).map(o => o.value);
+                const note = document.getElementById('taskNote').value.trim();
+                if (!name || !start || !end) return showAlert('Please fill in all fields.', 'Validation Error');
+                if (new Date(end) < new Date(start)) return showAlert('End date cannot be before start date.', 'Validation Error');
+                if (category && !categoryOrder.find(c => c.name === category)) categoryOrder.push({name: category, color: '#A9A9A9'});
+                const data = { name, category, incharge, start, end, percentComplete, dependencies, isMilestone, note };
+                if (id) {
+                    const existingTask = tasks.find(t => t.id === id);
+                    tasks = tasks.map(t => t.id === id ? ({ ...existingTask, ...data }) : t);
+                } else { 
+                    const newId = tasks.length > 0 ? Math.max(...tasks.map(t => t.id)) + 1 : 1; 
+                    const newTask = { id: newId, ...data, isLocked: false };
+                    tasks.push(newTask);
+                    
+                    if (data.category && sortMode === 'category') {
+                        sortTasks();
+                    }
+                }
+                updateSaveStatus(true); closeModal(); render();
+            };
+            
+            const deleteTask = () => {
+                const id = parseInt(document.getElementById('taskId').value);
+                const taskToDelete = tasks.find(t => t.id === id);
+                if (!taskToDelete) return;
+
+                showConfirm(`Are you sure you want to delete the task "${taskToDelete.name}"?`, 'Delete Task').then(confirmed => {
+                    if (confirmed) {
+                        tasks = tasks.filter(t => t.id !== id);
+                        const dependencyToRemove = `task-${id}`;
+                        
+                        tasks.forEach(t => { 
+                            if (t.dependencies) t.dependencies = t.dependencies.filter(d => d !== dependencyToRemove); 
+                        });
+                        milestones.forEach(m => {
+                            if (m.dependencies) m.dependencies = m.dependencies.filter(d => d !== dependencyToRemove);
+                        });
+
+                        updateSaveStatus(true); 
+                        closeModal(); 
+                        render();
+                    }
+                });
+            };
+            
+            const onMouseDown = (e, task) => {
+                if (task.isLocked) return;
+                e.preventDefault();
+                isDragging = true; 
+                dragTask = task; 
+                startX = e.clientX; 
+                initialTaskStart = new Date(task.start); 
+                initialTaskEnd = new Date(task.end);
+                
+                const barContainer = e.currentTarget.closest('.task-container');
+                initialLeft = parseFloat(barContainer.style.left || 0);
+                initialWidth = parseFloat(barContainer.style.width || 0);
+                
+                if (task.isMilestone) {
+                    dragMode = 'move';
+                    document.body.style.cursor = 'grabbing';
+                } else if (e.target.classList.contains('resize-handle-left')) { 
+                    dragMode = 'resize-left'; document.body.style.cursor = 'ew-resize'; 
+                } else if (e.target.classList.contains('resize-handle-right')) { 
+                    dragMode = 'resize-right'; document.body.style.cursor = 'ew-resize'; 
+                } else { 
+                    dragMode = 'move'; document.body.style.cursor = 'grabbing'; 
+                }
+                
+                e.currentTarget.classList.add('is-dragging');
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            };
+
+            const onMouseMove = (e) => {
+                if (!isDragging || !dragTask) return;
+                const deltaX = e.clientX - startX;
+                
+                const barContainer = document.querySelector(`.task-container[data-id='${dragTask.id}']`);
+                if (!barContainer) return;
+
+                // --- Real-time Date Label Update Logic ---
+                const daysPerColumn = timelineViewMode === 'week' ? 7 : 1;
+                const dayDeltaVisual = (deltaX / dayWidth) * daysPerColumn;
+                
+                // Smooth visual update first
+                if (dragMode === 'move') {
+                    barContainer.style.left = `${initialLeft + deltaX}px`;
+                    if (dragTask.isMilestone) {
+                        const dateLabel = barContainer.querySelector('.task-date-label');
+                        const newDateVisual = addDays(initialTaskStart, dayDeltaVisual);
+                        if (dateLabel) dateLabel.textContent = formatDateShort(newDateVisual);
+                    } else {
+                        const startDateLabel = barContainer.querySelector('.task-date-start');
+                        const endDateLabel = barContainer.querySelector('.task-date-end');
+                        const newStartVisual = addDays(initialTaskStart, dayDeltaVisual);
+                        const newEndVisual = addDays(initialTaskEnd, dayDeltaVisual);
+                        if (startDateLabel) startDateLabel.textContent = formatDateShort(newStartVisual);
+                        if (endDateLabel) endDateLabel.textContent = formatDateShort(newEndVisual);
+                    }
+                } else if (dragMode === 'resize-right') {
+                    const newWidth = Math.max(dayWidth / daysPerColumn, initialWidth + deltaX);
+                    barContainer.style.width = `${newWidth}px`;
+                    const endDateLabel = barContainer.querySelector('.task-date-end');
+                    const newEndVisual = addDays(initialTaskEnd, dayDeltaVisual);
+                    if (endDateLabel) endDateLabel.textContent = formatDateShort(newEndVisual);
+                } else { // resize-left
+                    const newWidth = Math.max(dayWidth / daysPerColumn, initialWidth - deltaX);
+                    barContainer.style.left = `${initialLeft + deltaX}px`;
+                    barContainer.style.width = `${newWidth}px`;
+                    const startDateLabel = barContainer.querySelector('.task-date-start');
+                    const newStartVisual = addDays(initialTaskStart, dayDeltaVisual);
+                    if (startDateLabel) startDateLabel.textContent = formatDateShort(newStartVisual);
+                }
+
+                // Update data model with snapping for final position
+                const dayDeltaSnapped = Math.round(dayDeltaVisual);
+                let newStart, newEnd;
+                if (dragMode === 'move') {
+                    newStart = addDays(initialTaskStart, dayDeltaSnapped);
+                    if (dragTask.isMilestone) {
+                        newEnd = newStart;
+                    } else {
+                        const dur = getDayDiff(initialTaskStart, initialTaskEnd); 
+                        newEnd = addDays(newStart, dur);
+                    }
+                } else if (dragMode === 'resize-right') {
+                    newStart = initialTaskStart;
+                    newEnd = addDays(initialTaskEnd, dayDeltaSnapped);
+                    if (newEnd < newStart) newEnd = newStart;
+                } else { // resize-left
+                    newEnd = initialTaskEnd;
+                    newStart = addDays(initialTaskStart, dayDeltaSnapped);
+                    if (newStart > newEnd) newStart = newEnd;
+                }
+
+                dragTask.start = fmt(newStart);
+                dragTask.end = fmt(newEnd);
+
+                // Real-time duration update in the task list
+                if (!dragTask.isMilestone) {
+                    let durationText;
+                    if (timelineViewMode === 'week') {
+                        const totalDays = calculateTotalDays(dragTask.start, dragTask.end);
+                        const weeks = calculateWeeksWithPrecision(totalDays);
+                        durationText = `${weeks}w`;
+                    } else { // 'day' view
+                        const workingDays = calculateWorkingDays(dragTask.start, dragTask.end);
+                        durationText = `${workingDays}d`;
+                    }
+                    const percentText = `(${dragTask.percentComplete || 0}%)`;
+                    const durationDisplayEl = taskListBody.querySelector(`.task-duration-display[data-task-id-duration='${dragTask.id}']`);
+                    if (durationDisplayEl) {
+                        durationDisplayEl.textContent = `${durationText} ${percentText}`;
+                    }
+                }
+                
+                renderDependencies(currentTimelineDates, dayWidth, currentTaskIndexMap);
+            };
+            
+            const onMouseUp = () => {
+                setTimeout(() => { isDragging = false; }, 10);
+                if (!dragTask) return;
+                if (fmt(initialTaskStart) !== dragTask.start || fmt(initialTaskEnd) !== dragTask.end) updateSaveStatus(true);
+                dragTask = null;
+                dragMode = null;
+                document.body.style.cursor = 'default';
+
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+
+                render();
+            };
+
+            // ---- Milestone Move Logic ---
+            const onMilestoneMoveStart = (e, milestone) => {
+                if (milestone.isLocked) return;
+                e.preventDefault();
+                e.stopPropagation();
+                isDraggingMilestone = true;
+                milestoneDidMove = false;
+                draggedMilestone = milestone;
+                startX = e.clientX;
+                initialMilestoneDate = new Date(milestone.date + 'T00:00:00');
+
+                const marker = e.currentTarget.closest('.milestone-marker');
+                initialLeft = parseFloat(marker.style.left || 0);
+
+                document.body.style.cursor = 'grabbing';
+                if(marker) marker.classList.add('is-dragging');
+
+                document.addEventListener('mousemove', onMilestoneMove);
+                document.addEventListener('mouseup', onMilestoneMoveEnd);
+            };
+
+            const onMilestoneMove = (e) => {
+                if (!isDraggingMilestone) return;
+                milestoneDidMove = true;
+
+                const deltaX = e.clientX - startX;
+                const headerMarker = document.querySelector(`.milestone-marker[data-id='${draggedMilestone.id}']`);
+                const lineMarker = document.querySelector(`.milestone-line-marker[data-id='${draggedMilestone.id}']`);
+                
+                // Smooth visual update
+                if (headerMarker) {
+                    headerMarker.style.left = `${initialLeft + deltaX}px`;
+                }
+                if (lineMarker) {
+                    lineMarker.style.left = `${initialLeft + deltaX}px`;
+                }
+                
+                const daysPerColumn = timelineViewMode === 'week' ? 7 : 1;
+                const dayDeltaVisual = (deltaX / dayWidth) * daysPerColumn;
+                const newDateVisual = addDays(initialMilestoneDate, dayDeltaVisual);
+                
+                if (headerMarker) {
+                    const dateLabel = headerMarker.querySelector('.milestone-date-label');
+                    if (dateLabel) dateLabel.textContent = formatDateShort(newDateVisual);
+                }
+
+                // Data update (snapped)
+                const dayDeltaSnapped = Math.round(dayDeltaVisual);
+                const newDateSnapped = addDays(initialMilestoneDate, dayDeltaSnapped);
+                draggedMilestone.date = fmt(newDateSnapped);
+
+                renderDependencies(currentTimelineDates, dayWidth, currentTaskIndexMap);
+            };
+            
+            const onMilestoneMoveEnd = () => {
+                if (!isDraggingMilestone) return;
+                 setTimeout(() => { isDraggingMilestone = false; }, 10);
+
+                if (fmt(initialMilestoneDate) !== draggedMilestone.date) {
+                    updateSaveStatus(true);
+                }
+
+                draggedMilestone = null;
+                document.body.style.cursor = 'default';
+                document.removeEventListener('mousemove', onMilestoneMove);
+                document.removeEventListener('mouseup', onMilestoneMoveEnd);
+                render();
+            };
+
+
+            // ---- Milestone Line Drag Logic --- - REMOVED
+
+            const toggleMilestoneLabelPosition = (e, milestoneToToggle) => {
+                e.stopPropagation();
+                const milestone = milestones.find(m => m.id === milestoneToToggle.id);
+                if (milestone) {
+                    milestone.labelPosition = (milestone.labelPosition === 'top') ? 'bottom' : 'top';
+                    updateSaveStatus(true);
+                    render();
+                }
+            };
+            
+            const toggleMilestoneDateLabelPosition = (e, milestoneToToggle) => {
+                e.stopPropagation();
+                const milestone = milestones.find(m => m.id === milestoneToToggle.id);
+                if (milestone) {
+                    milestone.dateLabelPosition = (milestone.dateLabelPosition === 'right') ? 'left' : 'right';
+                    updateSaveStatus(true);
+                    render();
+                }
+            };
+
+            const toggleTaskLock = (taskId) => {
+                const task = tasks.find(t => t.id === taskId);
+                if (task) {
+                    task.isLocked = !task.isLocked;
+                    updateSaveStatus(true);
+                    render();
+                }
+            };
+
+            const updateMasterMilestoneLockIcon = () => {
+                const btn = document.getElementById('toggleAllMilestonesLockBtn');
+                if (!btn) return;
+
+                const areAllLocked = milestones.length > 0 && milestones.every(m => m.isLocked);
+
+                if (areAllLocked) {
+                    btn.innerHTML = `<i data-lucide="lock" class="w-4 h-4"></i>`;
+                    btn.title = 'Unlock All Milestones';
+                    btn.classList.add('text-red-500');
+                    btn.classList.remove('text-gray-500');
+                } else {
+                    btn.innerHTML = `<i data-lucide="unlock" class="w-4 h-4"></i>`;
+                    btn.title = 'Lock All Milestones';
+                    btn.classList.remove('text-red-500');
+                    btn.classList.add('text-gray-500');
+                }
+                lucide.createIcons();
+            };
+
+            const updateToggleScaleBtnUI = () => {
+                const btn = document.getElementById('toggleScaleBtn');
+                if (!btn) return;
+                if (timelineViewMode === 'day') {
+                    btn.innerHTML = `<i data-lucide="calendar-days" class="w-4 h-4"></i>`;
+                    btn.title = 'Switch to Week View';
+                } else { // 'week' view
+                    btn.innerHTML = `<i data-lucide="calendar" class="w-4 h-4"></i>`;
+                    btn.title = 'Switch to Day View';
+                }
+                lucide.createIcons();
+            };
+
+            const toggleAllMilestonesLock = () => {
+                if (milestones.length === 0) return;
+
+                // Determine if we should lock or unlock.
+                // If even one is unlocked, the action will be to lock all.
+                // If all are locked, the action will be to unlock all.
+                const shouldLockAll = milestones.some(m => !m.isLocked);
+
+                milestones.forEach(m => {
+                    m.isLocked = shouldLockAll;
+                });
+
+                updateSaveStatus(true);
+                updateMasterMilestoneLockIcon();
+                render();
+            };
+
+            const categoryModal = document.getElementById('categoryModal');
+            const openCategoryModal = () => { renderCategoryModal(); categoryModal.classList.remove('hidden'); };
+            const closeCategoryModal = () => { categoryModal.classList.add('hidden'); render(); };
+            
+            const renderCategoryModal = () => {
+                const list = document.getElementById('categoryList');
+                list.innerHTML = '';
+
+                categoryOrder.forEach(cat => {
+                    if (categoryCollapseState[cat.name] === undefined) {
+                        categoryCollapseState[cat.name] = true; // Default to collapsed
+                    }
+                    const isCollapsed = categoryCollapseState[cat.name];
+
+                    const item = document.createElement('div');
+                    item.className = 'category-item flex items-center justify-between p-2 bg-gray-100 rounded-md';
+                    item.draggable = true;
+                    item.dataset.category = cat.name;
+
+                    item.innerHTML = `
+                        <div class="flex items-center flex-1 min-w-0 gap-2">
+                            <i data-lucide="grip-vertical" class="drag-handle text-gray-400 cursor-grab flex-shrink-0"></i>
+                            <button class="category-toggle-btn p-1 text-gray-500 hover:text-blue-600 rounded-md hover:bg-gray-200">
+                                <i data-lucide="${isCollapsed ? 'chevron-right' : 'chevron-down'}" class="w-4 h-4"></i>
+                            </button>
+                            <div class="category-image-container w-8 h-8 flex-shrink-0 bg-gray-200 rounded flex items-center justify-center cursor-pointer hover:bg-gray-300" title="Click to change image URL">
+                                ${cat.imageUrl ?
+                                    `<img src="${cat.imageUrl}" class="w-full h-full object-cover rounded" onerror="this.parentElement.innerHTML = '<i data-lucide=\\'image-off\\' class=\\'w-5 h-5 text-gray-400\\'></i>'">` :
+                                    `<i data-lucide="image-plus" class="w-5 h-5 text-gray-400"></i>`
+                                }
+                            </div>
+                            <div class="color-picker-wrapper flex-shrink-0">
+                                <div class="current-color-swatch" style="background-color: ${cat.color};" data-name="${cat.name}"></div>
+                            </div>
+                            <span class="category-name font-medium truncate">${cat.name}</span>
+                        </div>
+                        <div class="flex items-center">
+                            <button class="add-task-to-category-btn p-1 text-blue-600 hover:text-blue-800" data-category-name="${cat.name}" title="Add Task to ${cat.name}">
+                                <i data-lucide="plus" class="w-4 h-4"></i>
+                            </button>
+                            <button class="delete-category-btn text-red-600 hover:text-red-800 font-medium transition duration-300 p-2 rounded-md hover:bg-red-100"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="trash-2" class="lucide lucide-trash-2 w-5 h-5"><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M3 6h18"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
+                        </div>`;
+                    list.appendChild(item);
+
+                    const tasksContainer = document.createElement('div');
+                    tasksContainer.className = `category-tasks-container ${isCollapsed ? 'hidden' : ''}`;
+                    tasksContainer.dataset.tasksFor = cat.name;
+
+                    const tasksInCategory = tasks
+                        .filter(t => t.category === cat.name)
+                        .sort((a, b) => (a.categoryOrderIndex || 0) - (b.categoryOrderIndex || 0));
+
+                    tasksInCategory.forEach(task => {
+                        const taskSubItem = document.createElement('div');
+                        taskSubItem.className = 'task-sub-item flex items-center justify-between p-2 ml-8 rounded-md';
+                        taskSubItem.draggable = true;
+                        taskSubItem.dataset.taskId = task.id;
+                        taskSubItem.dataset.category = task.category;
+                        taskSubItem.innerHTML = `
+                            <div class="flex items-center">
+                                <i data-lucide="grip-vertical" class="drag-handle mr-2 text-gray-400 flex-shrink-0"></i>
+                                <span class="text-sm">${task.name}</span>
+                            </div>
+                            <button class="delete-task-sub-item-btn p-1 text-red-600 hover:text-red-800" data-task-id="${task.id}" title="Delete Task">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
+                        `;
+                        tasksContainer.appendChild(taskSubItem);
+                    });
+                    list.appendChild(tasksContainer);
+                });
+                lucide.createIcons();
+            };
+
+            // ---- Category Image URL Modal ----
+            const imageUrlModal = document.getElementById('imageUrlModal');
+            const openImageUrlModal = (categoryName) => {
+                if (categoryName === '__NEW__') {
+                    document.getElementById('imageUrlModalTitle').textContent = `Set Image URL for New Category`;
+                    document.getElementById('imageUrlCategoryName').value = '__NEW__';
+                    document.getElementById('categoryImageUrlInput').value = document.getElementById('newCategoryImageUrlHidden').value || '';
+                } else {
+                    const category = categoryOrder.find(c => c.name === categoryName);
+                    if (!category) return;
+                    
+                    document.getElementById('imageUrlModalTitle').textContent = `Edit Image URL for "${category.name}"`;
+                    document.getElementById('imageUrlCategoryName').value = category.name;
+                    document.getElementById('categoryImageUrlInput').value = category.imageUrl || '';
+                }
+                
+                imageUrlModal.classList.remove('hidden');
+                document.getElementById('categoryImageUrlInput').focus();
+            };
+
+            const closeImageUrlModal = () => {
+                imageUrlModal.classList.add('hidden');
+            };
+
+            const saveImageUrl = () => {
+                const categoryName = document.getElementById('imageUrlCategoryName').value;
+                const newUrl = document.getElementById('categoryImageUrlInput').value.trim();
+
+                if (categoryName === '__NEW__') {
+                    document.getElementById('newCategoryImageUrlHidden').value = newUrl;
+                    const container = document.getElementById('newCategoryImageContainer');
+                    if (newUrl) {
+                        container.innerHTML = `<img src="${newUrl}" class="w-full h-full object-cover rounded" onerror="this.parentElement.innerHTML = '<i data-lucide=\\'image-off\\' class=\\'w-5 h-5 text-gray-400\\'></i>'; lucide.createIcons();">`;
+                    } else {
+                        container.innerHTML = `<i data-lucide="image-plus" class="w-5 h-5 text-gray-400"></i>`;
+                        lucide.createIcons();
+                    }
+                } else {
+                    const category = categoryOrder.find(c => c.name === categoryName);
+                    if (category) {
+                        if(category.imageUrl !== newUrl) {
+                            category.imageUrl = newUrl;
+                            updateSaveStatus(true);
+                            renderCategoryModal();
+                            renderDashboard(); 
+                        }
+                    }
+                }
+                closeImageUrlModal();
+            };
+
+            const setupCategoryModalListeners = () => {
+                const list = document.getElementById('categoryList');
+                const form = document.getElementById('addCategoryForm');
+                const nameInput = document.getElementById('newCategoryName');
+                const newColorSwatch = document.getElementById('newCategoryColor');
+                const newImageContainer = document.getElementById('newCategoryImageContainer');
+                let dragged = null;
+
+                newImageContainer.addEventListener('click', () => {
+                    openImageUrlModal('__NEW__');
+                });
+                
+                form.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    const val = nameInput.value.trim();
+                    const color = newColorSwatch.dataset.color;
+                    const imageUrl = document.getElementById('newCategoryImageUrlHidden').value.trim();
+                    if (val && !categoryOrder.some(c => c.name === val)) {
+                        categoryOrder.push({ name: val, color: color, imageUrl: imageUrl });
+                        updateSaveStatus(true);
+                        renderCategoryModal();
+                    }
+                    nameInput.value = '';
+                    document.getElementById('newCategoryImageUrlHidden').value = '';
+                    newImageContainer.innerHTML = `<i data-lucide="image-plus" class="w-5 h-5 text-gray-400"></i>`;
+                    lucide.createIcons();
+
+                    newColorSwatch.style.backgroundColor = '#A9A9A9';
+                    newColorSwatch.dataset.color = '#A9A9A9';
+                });
+                list.addEventListener('click', (e) => {
+                    const toggleBtn = e.target.closest('.category-toggle-btn');
+                    if (toggleBtn) {
+                        const categoryItem = toggleBtn.closest('.category-item');
+                        const catName = categoryItem.dataset.category;
+                        categoryCollapseState[catName] = !categoryCollapseState[catName]; // Toggle state
+                        
+                        const isCollapsed = categoryCollapseState[catName];
+                        
+                        const tasksContainer = list.querySelector(`[data-tasks-for="${catName}"]`);
+                        if(tasksContainer) {
+                            tasksContainer.classList.toggle('hidden', isCollapsed);
+                        }
+
+                        // Update icon
+                        toggleBtn.innerHTML = `<i data-lucide="${isCollapsed ? 'chevron-right' : 'chevron-down'}" class="w-4 h-4"></i>`;
+                        lucide.createIcons();
+                        return;
+                    }
+
+                    const imageContainer = e.target.closest('.category-image-container');
+                    if (imageContainer) {
+                        const catName = imageContainer.closest('.category-item').dataset.category;
+                        openImageUrlModal(catName);
+                        return;
+                    }
+
+                    const delBtn = e.target.closest('.delete-category-btn');
+                    const addTaskBtn = e.target.closest('.add-task-to-category-btn');
+                    const delTaskBtn = e.target.closest('.delete-task-sub-item-btn');
+
+                    if (delBtn) {
+                        const catName = delBtn.closest('.category-item').dataset.category;
+                        showConfirm(`Are you sure you want to delete the category "${catName}"? This will also DELETE all tasks within it.`, 'Delete Category').then(confirmed => {
+                            if (confirmed) {
+                                const tasksToDeleteIds = tasks.filter(t => t.category === catName).map(t => t.id);
+                                
+                                tasks = tasks.filter(t => t.category !== catName);
+                                categoryOrder = categoryOrder.filter(c => c.name !== catName);
+
+                                tasks.forEach(t => {
+                                    if (t.dependencies) {
+                                        t.dependencies = t.dependencies.filter(depId => !tasksToDeleteIds.includes(depId));
+                                    }
+                                });
+
+                                updateSaveStatus(true);
+                                renderCategoryModal();
+                                render();
+                            }
+                        });
+                    } else if (addTaskBtn) {
+                        const categoryItem = addTaskBtn.closest('.category-item');
+                        const categoryName = addTaskBtn.dataset.categoryName;
+                        // Remove any existing input before adding a new one
+                        const existingInput = list.querySelector('.new-task-input-container');
+                        if (existingInput) {
+                            existingInput.remove();
+                        }
+
+                        // Create the input element container
+                        const inputContainer = document.createElement('div');
+                        inputContainer.className = 'new-task-input-container task-sub-item flex items-center p-2 ml-8 rounded-md';
+                        
+                        const input = document.createElement('input');
+                        input.type = 'text';
+                        input.className = 'flex-grow border rounded px-1 text-sm';
+                        input.placeholder = 'Enter new task name...';
+                        
+                        inputContainer.appendChild(input);
+                        
+                        // Insert the input container after the category item
+                        categoryItem.after(inputContainer);
+                        input.focus();
+
+                        const saveNewTask = () => {
+                            // Prevent running if the element is already removed
+                            if (!document.body.contains(inputContainer)) return;
+
+                            const taskName = input.value.trim();
+                            if (taskName) {
+                                const newId = tasks.length > 0 ? Math.max(...tasks.map(t => t.id)) + 1 : 1;
+                                const tasksInCategory = tasks.filter(t => t.category === categoryName);
+                                
+                                const newTask = {
+                                    id: newId,
+                                    name: taskName,
+                                    category: categoryName,
+                                    start: fmt(new Date()),
+                                    end: fmt(new Date()),
+                                    percentComplete: 0,
+                                    dependencies: [],
+                                    incharge: '',
+                                    isMilestone: false,
+                                    categoryOrderIndex: tasksInCategory.length,
+                                    isLocked: false,
+                                };
+                                tasks.push(newTask);
+                                updateSaveStatus(true);
+                                renderCategoryModal();
+                                render();
+                            } else {
+                                 inputContainer.remove();
+                            }
+                        };
+
+                        input.addEventListener('keydown', (ev) => {
+                            if (ev.key === 'Enter') {
+                                ev.preventDefault();
+                                input.blur(); // Let the blur event handle saving
+                            } else if (ev.key === 'Escape') {
+                                input.removeEventListener('blur', saveNewTask); // Important to prevent saving on escape
+                                inputContainer.remove();
+                            }
+                        });
+                        
+                        input.addEventListener('blur', saveNewTask);
+
+                    } else if (delTaskBtn) {
+                        const taskId = parseInt(delTaskBtn.dataset.taskId);
+                        const taskToDelete = tasks.find(t => t.id === taskId);
+                        if (taskToDelete) {
+                            showConfirm(`Are you sure you want to delete the task "${taskToDelete.name}"?`, 'Delete Task').then(confirmed => {
+                                if (confirmed) {
+                                    tasks = tasks.filter(t => t.id !== taskId);
+                                    // Also remove this task from any dependencies
+                                    tasks.forEach(t => {
+                                        if (t.dependencies) {
+                                            t.dependencies = t.dependencies.filter(depId => depId !== taskId);
+                                        }
+                                    });
+                                    updateSaveStatus(true);
+                                    renderCategoryModal();
+                                    render();
+                                }
+                            });
+                        }
+                    }
+                });
+                list.addEventListener('input', e => {
+                    if (e.target.classList.contains('category-color-picker')) {
+                         const catName = e.target.dataset.name;
+                         const category = categoryOrder.find(c => c.name === catName);
+                         if (category) {
+                             category.color = e.target.value;
+                             updateSaveStatus(true);
+                             render(); // Re-render main view to show color changes
+                         }
+                    }
+                });
+                list.addEventListener('dblclick', (e) => {
+                    const categorySpan = e.target.closest('.category-name');
+                    const taskSpan = e.target.closest('.task-sub-item .text-sm');
+
+                    if (categorySpan) {
+                        const item = categorySpan.closest('.category-item');
+                        item.draggable = false; // Disable dragging during edit
+                        const origName = item.dataset.category;
+                        const input = document.createElement('input');
+                        input.type = 'text';
+                        input.value = origName;
+                        input.className = 'flex-grow border rounded px-1';
+                        categorySpan.replaceWith(input);
+                        input.focus();
+
+                        const save = () => {
+                            const newName = input.value.trim();
+                            if (newName && newName !== origName) {
+                                const cat = categoryOrder.find(c => c.name === origName);
+                                if (cat) cat.name = newName;
+                                tasks.forEach(t => { if (t.category === origName) t.category = newName; });
+                                updateSaveStatus(true);
+                            }
+                            renderCategoryModal(); // This re-renders the item, making it draggable again
+                            render();
+                        };
+                        input.addEventListener('blur', save);
+                        input.addEventListener('keydown', (ev) => ev.key === 'Enter' && input.blur());
+                    } else if (taskSpan) {
+                        const item = taskSpan.closest('.task-sub-item');
+                        item.draggable = false; // Disable dragging
+                        const taskId = parseInt(item.dataset.taskId);
+                        const task = tasks.find(t => t.id === taskId);
+                        if (!task) return;
+
+                        const origName = task.name;
+
+                        const input = document.createElement('input');
+                        input.type = 'text';
+                        input.value = origName;
+                        input.className = 'flex-grow border rounded px-1 text-sm';
+                        taskSpan.replaceWith(input);
+                        input.focus();
+                        input.select();
+
+                        const save = () => {
+                            const newName = input.value.trim();
+                            if (newName && newName !== origName) {
+                                task.name = newName;
+                                updateSaveStatus(true);
+                            }
+                            renderCategoryModal(); // Re-render modal to restore span and draggable
+                            render(); // Re-render main chart to reflect the name change
+                        };
+
+                        input.addEventListener('blur', save);
+                        input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') input.blur(); });
+                    }
+                });
+                list.addEventListener('dragstart', (e) => { dragged = e.target; e.target.classList.add('dragging'); });
+                list.addEventListener('dragend', () => {
+                    if(!dragged) return;
+                    dragged.classList.remove('dragging');
+
+                    if (dragged.classList.contains('category-item')) {
+                        const newOrderNames = Array.from(list.querySelectorAll('.category-item')).map(i=>i.dataset.category);
+                        categoryOrder.sort((a, b) => newOrderNames.indexOf(a.name) - newOrderNames.indexOf(b.name));
+                    } else if (dragged.classList.contains('task-sub-item')) {
+                        const allItems = list.querySelectorAll('.category-item, .task-sub-item');
+                        let currentCategoryName = '';
+                        let categoryTaskIndex = 0;
+                        
+                        allItems.forEach(item => {
+                            if (item.classList.contains('category-item')) {
+                                currentCategoryName = item.dataset.category;
+                                categoryTaskIndex = 0;
+                            } else if (item.classList.contains('task-sub-item')) {
+                                const taskId = parseInt(item.dataset.taskId);
+                                const task = tasks.find(t => t.id === taskId);
+                                if (task) {
+                                    task.category = currentCategoryName;
+                                    task.categoryOrderIndex = categoryTaskIndex++;
+                                }
+                            }
+                        });
+                    }
+                    
+                    updateSaveStatus(true);
+                    renderCategoryModal();
+                    render(); // Re-render main gantt
+                    dragged=null;
+                });
+                list.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    if (!dragged) return;
+
+                    const afterElement = getDragAfterElement(list, e.clientY);
+                    
+                    if (dragged.classList.contains('category-item')) {
+                         // Logic for dragging categories
+                        if (afterElement == null) {
+                            list.appendChild(dragged);
+                        } else {
+                            // Prevents dropping a category inside another category's tasks
+                            const parentCategory = afterElement.closest('.category-item');
+                            if(parentCategory) {
+                                list.insertBefore(dragged, parentCategory);
+                            } else {
+                                list.insertBefore(dragged, afterElement);
+                            }
+                        }
+                    } else if (dragged.classList.contains('task-sub-item')) {
+                        // Logic for dragging tasks
+                        if (afterElement == null) {
+                             list.appendChild(dragged);
+                        } else {
+                            // Allow dropping anywhere
+                           list.insertBefore(dragged, afterElement);
+                        }
+                    }
+                });
+
+                const getDragAfterElement = (container, y) => {
+                    const draggableElements = [...container.querySelectorAll('.category-item:not(.dragging), .task-sub-item:not(.dragging)')];
+
+                    return draggableElements.reduce((closest, child) => {
+                        const box = child.getBoundingClientRect();
+                        const offset = y - box.top - box.height / 2;
+                        if (offset < 0 && offset > closest.offset) {
+                            return { offset: offset, element: child };
+                        } else {
+                            return closest;
+                        }
+                    }, { offset: Number.NEGATIVE_INFINITY }).element;
+                };
+            };
+
+            // ---- Holiday modal ----
+            const holidayModal = document.getElementById('holidayModal');
+            const calendarGrid = document.getElementById('calendarGrid');
+            const calendarYearEl = document.getElementById('calendarYear');
+
+            const toggleHoliday = (dateStr) => { const i = holidays.indexOf(dateStr); if (i>-1) holidays.splice(i,1); else holidays.push(dateStr); updateSaveStatus(true); renderHolidayCalendar(calendarDisplayYear); };
+
+            const countWorkingDaysInYear = (year) => {
+                const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+                const totalDays = isLeap ? 366 : 365;
+                const holidayCount = holidays.filter(h => new Date(h).getFullYear() === year).length;
+                return totalDays - holidayCount;
+            };
+
+            const renderHolidayCalendar = (year) => {
+                calendarGrid.innerHTML = ''; calendarYearEl.textContent = year;
+                const yearHolidays = holidays.filter(h => new Date(h).getFullYear() === year);
+                document.getElementById('holidayCount').textContent = yearHolidays.length;
+                document.getElementById('workingDayCount').textContent = countWorkingDaysInYear(year);
+                const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+                const today = new Date(); const curYear = today.getFullYear(); const curMonth = today.getMonth();
+                for (let month=0; month<12; month++) {
+                    const monthContainer = document.createElement('div');
+                    const isCurrentMonth = year===curYear && month===curMonth;
+                    monthContainer.className = isCurrentMonth ? 'p-1 border-2 border-blue-500 bg-blue-50 rounded-lg is-current-month-view' : 'p-1 border rounded-lg';
+                    monthContainer.style.height = '300px';
+                    monthContainer.style.display = 'flex';
+                    monthContainer.style.flexDirection = 'column';
+                    monthContainer.style.overflow = 'hidden';
+                    const daysInMonth = new Date(year, month+1, 0).getDate();
+                    const firstDay = new Date(year, month, 1).getDay();
+                    let monthHolidays = 0; for (let d=1; d<=daysInMonth; d++){ if (holidays.includes(fmt(new Date(year, month, d)))) monthHolidays++; }
+                    const monthWorkingDays = daysInMonth - monthHolidays;
+                    let html = `
+                        <div class="flex items-center justify-between mb-2 h-8">
+                            <div class="flex items-baseline space-x-2">
+                                <h4 class="font-semibold">${monthNames[month]}</h4>
+                                <span class="text-sm font-normal text-gray-400">${year}</span>
+                            </div>
+                            <div class="text-xs font-semibold">
+                                <span class="text-red-500">${monthHolidays}</span>
+                                <span class="text-gray-300">/</span>
+                                <span class="text-green-600">${monthWorkingDays}</span>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-7 gap-1 text-center flex-1 overflow-hidden px-1">`;
+                    const dayHeaders=['S','M','T','W','T','F','S']; dayHeaders.forEach(d => { html += `<div class="text-xs text-gray-400 font-medium">${d}</div>`; });
+                    for (let i=0;i<firstDay;i++) html += `<div class="is-placeholder"></div>`;
+                    for (let d=1; d<=daysInMonth; d++) {
+                        const date = new Date(year, month, d); const s = fmt(date);
+                        const isWeekend = date.getDay()===0 || date.getDay()===6; const isHoliday = holidays.includes(s); const isToday = s === fmt(new Date());
+                        html += `<div class="calendar-day ${isWeekend?'is-weekend':''} ${isHoliday?'is-holiday':''} ${isToday?'is-today':''}" data-date="${s}"><span>${d}</span></div>`;
+                    }
+                    html += `</div>`; monthContainer.innerHTML = html; calendarGrid.appendChild(monthContainer);
+                }
+            };
+
+            calendarGrid.addEventListener('click', (e) => { const el = e.target.closest('.calendar-day'); if (el && !el.classList.contains('is-placeholder')) toggleHoliday(el.dataset.date); });
+            document.getElementById('prevYearBtn').addEventListener('click', () => renderHolidayCalendar(--calendarDisplayYear));
+            document.getElementById('nextYearBtn').addEventListener('click', () => renderHolidayCalendar(++calendarDisplayYear));
+            document.getElementById('todayYearBtn').addEventListener('click', () => { calendarDisplayYear = new Date().getFullYear(); renderHolidayCalendar(calendarDisplayYear); const cur = calendarGrid.querySelector('.is-current-month-view'); if (cur) { const H = calendarGrid.clientHeight; const h = cur.clientHeight; const top = cur.offsetTop; calendarGrid.scrollTo({ top: top - (H/2) + (h/2), behavior: 'smooth' }); } });
+            const openHolidayModal = () => { calendarDisplayYear = new Date().getFullYear(); renderHolidayCalendar(calendarDisplayYear); holidayModal.classList.remove('hidden'); };
+            const closeHolidayModal = () => { holidayModal.classList.add('hidden'); render(); };
+            
+            holidayModal.addEventListener('click', (e) => {
+                if (e.target === holidayModal) {
+                    closeHolidayModal();
+                }
+            });
+            
+            // ---- Milestone Modal ---
+            const milestoneModal = document.getElementById('milestoneModal');
+            const milestoneEditModal = document.getElementById('milestoneEditModal');
+            const openMilestoneModal = () => { renderMilestoneModal(); milestoneModal.classList.remove('hidden'); };
+            const closeMilestoneModal = () => { milestoneModal.classList.add('hidden'); render(); };
+
+            const openMilestoneEditModal = (milestoneId) => {
+                const milestone = milestones.find(m => m.id === milestoneId);
+                if (!milestone) return;
+
+                document.getElementById('milestoneId').value = milestone.id;
+                document.getElementById('milestoneEditName').value = milestone.name;
+                document.getElementById('milestoneEditDate').value = milestone.date;
+
+                const depsSelect = document.getElementById('milestoneDependencies');
+                depsSelect.innerHTML = '';
+                // Logic to populate task dependencies removed as per request.
+                
+                milestoneModal.classList.add('hidden');
+                milestoneEditModal.classList.remove('hidden');
+            };
+
+            const closeMilestoneEditModal = () => {
+                milestoneEditModal.classList.add('hidden');
+                openMilestoneModal();
+            };
+
+            const saveMilestoneEdit = () => {
+                const id = parseInt(document.getElementById('milestoneId').value);
+                const milestone = milestones.find(m => m.id === id);
+                if (!milestone) return;
+
+                milestone.name = document.getElementById('milestoneEditName').value;
+                milestone.date = document.getElementById('milestoneEditDate').value;
+                milestone.dependencies = Array.from(document.getElementById('milestoneDependencies').selectedOptions).map(o => o.value);
+
+                updateSaveStatus(true);
+                closeMilestoneEditModal();
+                render();
+            };
+
+
+            const renderMilestoneModal = () => {
+                const listEl = document.getElementById('milestoneList');
+                listEl.innerHTML = '';
+                
+                milestones.sort((a,b) => new Date(a.date) - new Date(b.date));
+                
+                milestones.forEach(m => {
+                    const item = document.createElement('div');
+                    item.className = 'flex items-center justify-between p-2 bg-gray-50 rounded';
+                    
+                     const paletteHTML = colorPalette.map(color => `<div class="palette-swatch" style="background-color:${color}" data-color="${color}"></div>`).join('');
+                    
+                    item.innerHTML = `
+                        <div class="flex items-center space-x-2 flex-1 min-w-0">
+                           <div class="color-picker-wrapper flex-shrink-0">
+                               <div class="current-color-swatch" style="background-color:${m.color || '#333333'};" data-id="${m.id}"></div>
+                           </div>
+                           <span class="milestone-name font-medium truncate">${m.name}</span>
+                           <span class="milestone-date text-sm text-gray-500 truncate">${m.date}</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <button class="delete-milestone-btn text-red-600 hover:text-red-800 font-medium transition duration-300 p-2 rounded-md hover:bg-red-100" data-id="${m.id}"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="trash-2" class="lucide lucide-trash-2 w-5 h-5"><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M3 6h18"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
+                        </div>
+                    `;
+                    listEl.appendChild(item);
+                });
+                lucide.createIcons();
+            };
+            
+            const setupMilestoneListeners = () => {
+                const addMilestoneForm = document.getElementById('addMilestoneForm');
+                const newMilestoneColorSwatch = document.getElementById('newMilestoneColor');
+
+                addMilestoneForm.addEventListener('submit', e => {
+                    e.preventDefault();
+                    const nameInput = document.getElementById('newMilestoneName');
+                    const dateInput = document.getElementById('newMilestoneDate');
+                    const name = nameInput.value.trim();
+                    const date = dateInput.value;
+                    const color = newMilestoneColorSwatch.dataset.color;
+                    if (name && date) {
+                        const newId = milestones.length > 0 ? Math.max(...milestones.map(m => m.id)) + 1 : 1;
+                        milestones.push({ id: newId, name, date, color, labelPosition: 'bottom', dateLabelPosition: 'right', dependencies: [], isLocked: false });
+                        updateSaveStatus(true);
+                        renderMilestoneModal();
+                        updateMasterMilestoneLockIcon();
+                        nameInput.value = '';
+                        dateInput.value = '';
+                        newMilestoneColorSwatch.style.backgroundColor = '#A9A9A9';
+                        newMilestoneColorSwatch.dataset.color = '#A9A9A9';
+                    }
+                });
+
+                document.getElementById('milestoneList').addEventListener('click', e => {
+                    const delBtn = e.target.closest('.delete-milestone-btn');
+
+                    if (delBtn) {
+                        const id = parseInt(delBtn.dataset.id);
+                        const milestoneToDelete = milestones.find(m => m.id === id);
+                        if (milestoneToDelete) {
+                            showConfirm(`Are you sure you want to delete the milestone "${milestoneToDelete.name}"?`, 'Delete Milestone').then(confirmed => {
+                                if (confirmed) {
+                                    milestones = milestones.filter(m => m.id !== id);
+                                    const dependencyToRemove = `milestone-${id}`;
+                                    tasks.forEach(t => {
+                                        if (t.dependencies) t.dependencies = t.dependencies.filter(d => d !== dependencyToRemove);
+                                    });
+                                    milestones.forEach(m => {
+                                        if (m.dependencies) m.dependencies = m.dependencies.filter(d => d !== dependencyToRemove);
+                                    });
+                                    updateSaveStatus(true);
+                                    renderMilestoneModal();
+                                    updateMasterMilestoneLockIcon();
+                                    render();
+                                }
+                            });
+                        }
+                    }
+
+                    const editBtn = e.target.closest('.edit-milestone-btn');
+                    if(editBtn) {
+                        openMilestoneEditModal(parseInt(editBtn.dataset.id));
+                    }
+                });
+                
+                document.getElementById('milestoneList').addEventListener('input', e => {
+                    if (e.target.classList.contains('milestone-color-picker')) {
+                        const id = parseInt(e.target.dataset.id);
+                        const milestone = milestones.find(m => m.id === id);
+                        if (milestone) {
+                            milestone.color = e.target.value;
+                            updateSaveStatus(true);
+                        }
+                    }
+                });
+
+                 document.getElementById('milestoneList').addEventListener('dblclick', e => {
+                    const target = e.target.closest('.milestone-name, .milestone-date');
+                    if (!target) return;
+
+                    const item = target.closest('.flex');
+                    const originalValue = target.textContent;
+                    const isDate = target.classList.contains('milestone-date');
+                    const input = document.createElement('input');
+                    input.type = isDate ? 'date' : 'text';
+                    input.value = originalValue;
+                    input.className = 'border rounded px-1 py-0.5';
+
+                    target.replaceWith(input);
+                    input.focus();
+
+                    const save = () => {
+                        const newValue = input.value.trim();
+                        const id = parseInt(item.parentElement.querySelector('.delete-milestone-btn').dataset.id);
+                        const milestone = milestones.find(m => m.id === id);
+                        if (milestone && newValue && newValue !== originalValue) {
+                            milestone[isDate ? 'date' : 'name'] = newValue;
+                            updateSaveStatus(true);
+                        }
+                        renderMilestoneModal();
+                    };
+
+                    input.addEventListener('blur', save);
+                    input.addEventListener('keydown', ev => { if (ev.key === 'Enter') input.blur(); });
+                });
+
+                document.getElementById('saveMilestoneEditBtn').addEventListener('click', saveMilestoneEdit);
+                document.getElementById('cancelMilestoneEditBtn').addEventListener('click', closeMilestoneEditModal);
+
+            };
+
+            // ---- Excel save/import ----
+            const saveTasksToExcel = () => {
+                const wsData = tasks.map(t => ({ 'ID': t.id, 'Project Title': projectTitleEl.textContent, 'Task Name': t.name, 'Category': t.category || '', 'In Charge': t.incharge || '', 'Start Date': t.start, 'End Date': t.end, 'Percent Complete': t.percentComplete || 0, 'Dependencies': t.dependencies ? t.dependencies.join(',') : '', 'Is Milestone': t.isMilestone || false, 'Category Order Index': t.categoryOrderIndex, 'Is Locked': t.isLocked || false, 'Note': t.note || '' }));
+                const ws = XLSX.utils.json_to_sheet(wsData);
+                const wsCat = XLSX.utils.json_to_sheet(categoryOrder.map(c => ({ Category: c.name, Color: c.color, ImageURL: c.imageUrl || '' })));
+                const wsHol = XLSX.utils.json_to_sheet(holidays.map(h => ({ Holiday: h })));
+                const wsMilestones = XLSX.utils.json_to_sheet(milestones.map(m => ({ ID: m.id, Name: m.name, Date: m.date, Color: m.color, LabelPosition: m.labelPosition, DateLabelPosition: m.dateLabelPosition, Dependencies: m.dependencies ? m.dependencies.join(',') : '', 'Is Locked': m.isLocked || false })));
+                
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, 'Tasks');
+                XLSX.utils.book_append_sheet(wb, wsCat, 'Categories');
+                XLSX.utils.book_append_sheet(wb, wsHol, 'Holidays');
+                XLSX.utils.book_append_sheet(wb, wsMilestones, 'Milestones');
+                
+                const safeProjectTitle = projectTitleEl.textContent.trim().replace(/[^a-z0-9_-\s]/gi, '_').replace(/\s+/g, '_');
+                const filename = `${safeProjectTitle || 'GanttChart_Tasks'}.xlsx`;
+                XLSX.writeFile(wb, filename);
+                updateSaveStatus(false);
+            };
+
+            const importTasks = (e) => {
+                const file = e.target.files[0]; if (!file) return; lastImportedFilename = file.name;
+                const reader = new FileReader(); reader.onload = (ev) => {
+                    try {
+                        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', cellDates: true });
+                        const sheetNames = wb.SheetNames; if (sheetNames.length === 0) throw new Error('No sheets found');
+                        const taskJson = XLSX.utils.sheet_to_json(wb.Sheets[sheetNames[0]]);
+                        if (taskJson.length > 0 && taskJson[0]['Project Title']) projectTitleEl.textContent = taskJson[0]['Project Title'];
+                        const parseDateCell = (cell) => {
+                            if (cell instanceof Date) return isNaN(cell) ? null : cell;
+                            if (typeof cell === 'string') { if (/^\d{4}-\d{2}-\d{2}$/.test(cell)) return new Date(cell + 'T00:00:00'); const d = new Date(cell); return isNaN(d) ? null : d; }
+                            if (typeof cell === 'number') { const d = new Date(Math.round((cell - 25569) * 86400 * 1000)); d.setMinutes(d.getMinutes() + d.getTimezoneOffset()); return isNaN(d) ? null : d; }
+                            return null;
+                        };
+                        tasks = taskJson.map((row, index) => {
+                            if (!row['ID'] || !row['Task Name'] || !row['Start Date'] || !row['End Date']) return null;
+                            const s = parseDateCell(row['Start Date']); const e2 = parseDateCell(row['End Date']); if (!s || !e2) return null;
+                            const start = fmt(s); const end = fmt(e2); if (new Date(end) < new Date(start)) return null;
+                            return { id: parseInt(row['ID']), name: row['Task Name'], category: row['Category'] || '', incharge: row['In Charge'] || '', start, end, percentComplete: row['Percent Complete'] || 0, dependencies: (row['Dependencies'] || '').toString().split(',').filter(d => d), isMilestone: row['Is Milestone'] === true || String(row['Is Milestone']).toLowerCase() === 'true', categoryOrderIndex: row['Category Order Index'] || index, isLocked: row['Is Locked'] === true || String(row['Is Locked']).toLowerCase() === 'true', note: row['Note'] || '' };
+                        }).filter(Boolean);
+                        if (sheetNames.includes('Categories')) {
+                             categoryOrder = XLSX.utils.sheet_to_json(wb.Sheets['Categories']).map(r => ({ name: r.Category, color: r.Color || '#A9A9A9', imageUrl: r.ImageURL || '' })).filter(c => c.name);
+                        } else { 
+                            initializeCategoryOrder(); 
+                        }
+                        if (sheetNames.includes('Holidays')) {
+                            holidays = XLSX.utils.sheet_to_json(wb.Sheets['Holidays']).map(r => { const d = parseDateCell(r.Holiday); return d ? fmt(d) : null; }).filter(Boolean);
+                        } else { holidays = []; }
+                        if (sheetNames.includes('Milestones')) {
+                            milestones = XLSX.utils.sheet_to_json(wb.Sheets['Milestones']).map(r => {
+                                const d = parseDateCell(r.Date);
+                                return d ? { id: parseInt(r.ID), name: r.Name, date: fmt(d), color: r.Color || '#333333', labelPosition: r.LabelPosition || 'bottom', dateLabelPosition: r.DateLabelPosition || 'right', dependencies: (r.Dependencies || '').toString().split(',').filter(d=>d), isLocked: r['Is Locked'] === true || String(r['Is Locked']).toLowerCase() === 'true' } : null;
+                            }).filter(Boolean);
+                        } else {
+                            milestones = [];
+                        }
+                        updateMasterMilestoneLockIcon();
+                        render(); showAlert(`Successfully opened ${tasks.length} tasks!`, 'Success'); updateSaveStatus(false);
+                    } catch (err) { console.error('Error opening file:', err); showAlert('An error occurred while opening the file.', 'Error'); }
+                    finally { importFileInput.value = ''; }
+                }; reader.readAsArrayBuffer(file);
+            };
+            
+            const initializeCategoryOrder = () => { 
+                const categoryNames = Array.from(new Set(tasks.map(t => t.category).filter(Boolean)));
+                categoryOrder = categoryNames.map(name => ({
+                    name: name,
+                    color: '#A9A9A9', // Default to black if not specified
+                    imageUrl: ''
+                }));
+            };
+
+            // ---- Listeners ----
+            projectTitleEl.addEventListener('click', () => {
+                const curr = projectTitleEl.textContent; const input = document.createElement('input'); input.type='text'; input.value=curr; input.className='text-2xl md:text-3xl font-bold text-gray-700 border border-blue-400 rounded-md p-1 w-full';
+                projectTitleEl.replaceWith(input); input.focus(); input.select();
+                const save = () => { const next = input.value.trim(); projectTitleEl.textContent = next || 'Untitled Project'; input.replaceWith(projectTitleEl); if (next !== curr) updateSaveStatus(true); };
+                input.addEventListener('blur', save);
+                input.addEventListener('keydown', (e) => { if (e.key==='Enter') input.blur(); if (e.key==='Escape'){ input.value=curr; input.blur(); } });
+            });
+
+            document.getElementById('addTaskBtn').addEventListener('click', () => openModal());
+            document.getElementById('saveTaskBtn').addEventListener('click', saveTask);
+            document.getElementById('cancelBtn').addEventListener('click', closeModal);
+            document.getElementById('deleteTaskBtn').addEventListener('click', deleteTask);
+
+            document.getElementById('saveBtn').addEventListener('click', saveTasksToExcel);
+
+            const confirmModal = document.getElementById('confirmModal');
+            const confirmProceedBtn = document.getElementById('confirmProceedBtn');
+            const confirmCancelBtn = document.getElementById('confirmCancelBtn');
+
+            document.getElementById('importBtn').addEventListener('click', () => {
+                if (isDataDirty) {
+                    confirmModal.classList.remove('hidden');
+                    lucide.createIcons(); // To render the alert icon
+                } else {
+                    importFileInput.click();
+                }
+            });
+
+            const closeConfirmModal = () => {
+                confirmModal.classList.add('hidden');
+            };
+
+            confirmProceedBtn.addEventListener('click', () => {
+                closeConfirmModal();
+                importFileInput.click();
+            });
+            confirmCancelBtn.addEventListener('click', closeConfirmModal);
+            confirmModal.addEventListener('click', (e) => {
+                if (e.target === confirmModal) {
+                    closeConfirmModal();
+                }
+            });
+
+            // Alert Modal event listeners
+            document.getElementById('alertOkBtn').addEventListener('click', () => {
+                document.getElementById('alertModal').classList.add('hidden');
+                if (alertCallback) {
+                    alertCallback();
+                    alertCallback = null;
+                }
+            });
+
+            document.getElementById('alertModal').addEventListener('click', (e) => {
+                if (e.target === document.getElementById('alertModal')) {
+                    document.getElementById('alertModal').classList.add('hidden');
+                    if (alertCallback) {
+                        alertCallback();
+                        alertCallback = null;
+                    }
+                }
+            });
+
+            // Delete Confirm Modal event listeners
+            document.getElementById('deleteConfirmBtn').addEventListener('click', () => {
+                document.getElementById('deleteConfirmModal').classList.add('hidden');
+                if (confirmCallback) {
+                    confirmCallback(true);
+                    confirmCallback = null;
+                }
+            });
+
+            document.getElementById('deleteCancelBtn').addEventListener('click', () => {
+                document.getElementById('deleteConfirmModal').classList.add('hidden');
+                if (confirmCallback) {
+                    confirmCallback(false);
+                    confirmCallback = null;
+                }
+            });
+
+            document.getElementById('deleteConfirmModal').addEventListener('click', (e) => {
+                if (e.target === document.getElementById('deleteConfirmModal')) {
+                    document.getElementById('deleteConfirmModal').classList.add('hidden');
+                    if (confirmCallback) {
+                        confirmCallback(false);
+                        confirmCallback = null;
+                    }
+                }
+            });
+
+            importFileInput.addEventListener('change', importTasks);
+
+            taskListBody.addEventListener('click', (e) => { 
+                const btn = e.target.closest('.edit-task-btn'); 
+                const noteBtn = e.target.closest('.note-icon-container');
+                const lockBtn = e.target.closest('.lock-task-btn');
+                if (btn) {
+                    openModal({taskId: parseInt(btn.dataset.id)});
+                } else if (noteBtn) {
+                     openModal({taskId: parseInt(noteBtn.dataset.id)});
+                } else if (lockBtn) {
+                    toggleTaskLock(parseInt(lockBtn.dataset.id));
+                }
+            });
+
+            // Note hover preview events - similar to imageHoverPreview
+            const noteHoverPreviewEl = document.getElementById('noteHoverPreview');
+            let currentNoteIcon = null;
+            let hoverTimeout = null;
+            
+            if (noteHoverPreviewEl) {
+                taskListBody.addEventListener('mouseenter', (e) => {
+                    const noteIcon = e.target.closest('.note-icon-with-tooltip');
+                    if (noteIcon && noteIcon.dataset.note) {
+                        currentNoteIcon = noteIcon;
+                        
+                        // Clear any existing timeout
+                        if (hoverTimeout) {
+                            clearTimeout(hoverTimeout);
+                        }
+                        
+                        // Show preview after a small delay to prevent flickering
+                        hoverTimeout = setTimeout(() => {
+                            if (currentNoteIcon === noteIcon) {
+                                const note = noteIcon.dataset.note;
+                                
+                                const previewMaxWidth = 300;
+                                const previewMaxHeight = 200;
+                                
+                                // Position exactly at mouse pointer
+                                let top = e.clientY + 15; // Show below mouse pointer
+                                let left = e.clientX + 15; // Show to the right of mouse pointer
+
+                                // Adjust if it goes off-screen
+                                if (top + previewMaxHeight > window.innerHeight - 10) { // Adjust bottom
+                                    top = e.clientY - previewMaxHeight - 5;
+                                }
+                                if (left + previewMaxWidth > window.innerWidth - 10) { // Adjust right
+                                    left = e.clientX - previewMaxWidth - 5;
+                                }
+                                if (left < 10) { // Adjust left
+                                    left = 10;
+                                }
+                                if (top < 10) { // Adjust top
+                                    top = 10;
+                                }
+                                
+                                noteHoverPreviewEl.textContent = note;
+                                noteHoverPreviewEl.style.top = `${top}px`;
+                                noteHoverPreviewEl.style.left = `${left}px`;
+                                
+                                noteHoverPreviewEl.classList.remove('hidden');
+                                noteHoverPreviewEl.classList.add('show');
+                            }
+                        }, 100); // Small delay to prevent flickering
+                    }
+                }, true);
+
+                taskListBody.addEventListener('mouseleave', (e) => {
+                    const noteIcon = e.target.closest('.note-icon-with-tooltip');
+                    if (noteIcon && currentNoteIcon === noteIcon) {
+                        currentNoteIcon = null;
+                        
+                        // Clear timeout if mouse leaves before delay
+                        if (hoverTimeout) {
+                            clearTimeout(hoverTimeout);
+                            hoverTimeout = null;
+                        }
+                        
+                        noteHoverPreviewEl.classList.add('hidden');
+                        noteHoverPreviewEl.classList.remove('show');
+                    }
+                }, true);
+
+                // Update position on mousemove when preview is visible
+                taskListBody.addEventListener('mousemove', (e) => {
+                    if (currentNoteIcon && noteHoverPreviewEl.classList.contains('show')) {
+                        const previewMaxWidth = 300;
+                        const previewMaxHeight = 200;
+                        
+                        // Position exactly at mouse pointer
+                        let top = e.clientY + 15; // Show below mouse pointer
+                        let left = e.clientX + 15; // Show to the right of mouse pointer
+
+                        // Adjust if it goes off-screen
+                        if (top + previewMaxHeight > window.innerHeight - 10) { // Adjust bottom
+                            top = e.clientY - previewMaxHeight - 5;
+                        }
+                        if (left + previewMaxWidth > window.innerWidth - 10) { // Adjust right
+                            left = e.clientX - previewMaxWidth - 5;
+                        }
+                        if (left < 10) { // Adjust left
+                            left = 10;
+                        }
+                        if (top < 10) { // Adjust top
+                            top = 10;
+                        }
+                        
+                        noteHoverPreviewEl.style.top = `${top}px`;
+                        noteHoverPreviewEl.style.left = `${left}px`;
+                    }
+                }, true);
+            }
+            
+            timelineBody.addEventListener('mousedown', (e) => {
+                // This listener is now empty as the drag handle is removed.
+            });
+
+            document.getElementById('sortTaskBtn').addEventListener('click', () => {
+                sortMode = (sortMode === 'date') ? 'category' : 'date';
+                updateSortButtonUI();
+                sortTasks();
+                render();
+            });
+
+            document.getElementById('toggleDashboardBtn').addEventListener('click', () => {
+                isDashboardVisible = !isDashboardVisible;
+                updateDashboardVisibility();
+            });
+            
+            document.getElementById('manageCategoriesBtn').addEventListener('click', openCategoryModal);
+            document.getElementById('closeCategoryModalBtn').addEventListener('click', closeCategoryModal);
+            setupCategoryModalListeners();
+
+            // Image URL Modal Listeners
+            document.getElementById('saveImageUrlBtn').addEventListener('click', saveImageUrl);
+            document.getElementById('cancelImageUrlBtn').addEventListener('click', closeImageUrlModal);
+            document.getElementById('imageUrlForm').addEventListener('submit', (e) => {
+                e.preventDefault();
+                saveImageUrl();
+            });
+
+            document.getElementById('manageHolidaysBtn').addEventListener('click', openHolidayModal);
+            document.getElementById('closeHolidayModalBtn').addEventListener('click', closeHolidayModal);
+            
+            document.getElementById('manageMilestonesBtn').addEventListener('click', openMilestoneModal);
+            document.getElementById('closeMilestoneModalBtn').addEventListener('click', closeMilestoneModal);
+            setupMilestoneListeners();
+            document.getElementById('toggleAllMilestonesLockBtn').addEventListener('click', toggleAllMilestonesLock);
+
+            // Generic click handler for color pickers
+             document.body.addEventListener('click', (e) => {
+                const isSwatch = e.target.classList.contains('current-color-swatch');
+                const isPaletteClick = e.target.closest('.color-palette-popup');
+
+                if (isSwatch) {
+                    const currentlyOpen = activeColorSwatch === e.target;
+                    globalColorPalette.classList.add('hidden');
+                    activeColorSwatch = null;
+                    
+                    if (!currentlyOpen) {
+                        activeColorSwatch = e.target;
+                        const currentColor = activeColorSwatch.style.backgroundColor;
+
+                        globalColorPalette.innerHTML = colorPalette.map(color => {
+                            const swatchRgb = hexToRgba(color);
+                            const currentRgb = currentColor;
+                             return `<div class="palette-swatch" style="background-color:${color}" data-color="${color}"></div>`;
+                        }).join('');
+                        
+                        const rect = activeColorSwatch.getBoundingClientRect();
+                        
+                        globalColorPalette.classList.remove('hidden');
+                        const paletteRect = globalColorPalette.getBoundingClientRect();
+                        
+                        let top = rect.top - paletteRect.height - 8;
+                        if (top < 0) {
+                            top = rect.bottom + 8;
+                        }
+
+                        let left = rect.left;
+                        if (left + paletteRect.width > window.innerWidth) {
+                            left = rect.right - paletteRect.width;
+                        }
+                        
+                        globalColorPalette.style.top = `${top}px`;
+                        globalColorPalette.style.left = `${left}px`;
+                    }
+                } else if (isPaletteClick) {
+                    if (e.target.classList.contains('palette-swatch')) {
+                        const newColor = e.target.dataset.color;
+                        if (activeColorSwatch) {
+                            activeColorSwatch.style.backgroundColor = newColor;
+                            activeColorSwatch.dataset.color = newColor;
+
+                            if (activeColorSwatch.dataset.name) { // Category
+                                const catName = activeColorSwatch.dataset.name;
+                                const category = categoryOrder.find(c => c.name === catName);
+                                if(category) {
+                                    category.color = newColor;
+                                    updateSaveStatus(true);
+                                    render();
+                                }
+                            } else if (activeColorSwatch.dataset.id) { // Milestone
+                                const milestoneId = parseInt(activeColorSwatch.dataset.id);
+                                const milestone = milestones.find(m => m.id === milestoneId);
+                                if (milestone) {
+                                    milestone.color = newColor;
+                                    updateSaveStatus(true);
+                                    render();
+                                }
+                            }
+                        }
+                        globalColorPalette.classList.add('hidden');
+                        activeColorSwatch = null;
+                    }
+                } else {
+                    globalColorPalette.classList.add('hidden');
+                    activeColorSwatch = null;
+                }
+            });
+
+            // Zoom controls
+            document.getElementById('scrollToTodayBtn').addEventListener('click', () => {
+                const todayLine = document.getElementById('today-line-marker');
+                if (todayLine) {
+                    const leftPosition = parseFloat(todayLine.style.left);
+                    const timelineContainer = document.getElementById('ganttTimelineBodyContainer');
+                    const containerWidth = timelineContainer.clientWidth;
+                    
+                    timelineContainer.scrollTo({
+                        left: leftPosition - (containerWidth / 2),
+                        behavior: 'smooth'
+                    });
+                }
+            });
+            document.getElementById('toggleScaleBtn').addEventListener('click', () => {
+                if (timelineViewMode === 'day') {
+                    timelineViewMode = 'week';
+                    dayWidth = 40; // Reset width when switching
+                } else {
+                    timelineViewMode = 'day';
+                    dayWidth = 40; // Reset width when switching
+                }
+                updateToggleScaleBtnUI();
+                render();
+            });
+            document.getElementById('zoomInBtn').addEventListener('click', () => {
+                dayWidth = Math.min(120, dayWidth + 20);
+                render();
+            });
+            document.getElementById('zoomOutBtn').addEventListener('click', () => { 
+                dayWidth = Math.max(20, dayWidth - 20);
+                render(); 
+            });
+
+            // Toggle dependencies
+            document.getElementById('toggleDependenciesBtn').addEventListener('click', () => {
+                showDependencies = !showDependencies;
+                renderDependencies(currentTimelineDates, dayWidth, currentTaskIndexMap);
+                updateDependencyToggleUI();
+            });
+
+            // sync vertical scroll between list and timeline
+            const taskListEl = document.getElementById('taskListBody'); 
+            const timelineEl = document.getElementById('ganttTimelineBodyContainer');
+            
+            let syncing = false;
+            taskListEl.addEventListener('scroll', () => { 
+                if (syncing) return; 
+                syncing = true; 
+                timelineEl.scrollTop = taskListEl.scrollTop; 
+                syncing = false; 
+            });
+            timelineEl.addEventListener('scroll', () => { 
+                if (syncing) return; 
+                syncing = true; 
+                taskListEl.scrollTop = timelineEl.scrollTop; 
+                timelineHeader.style.left = `-${timelineEl.scrollLeft}px`;
+                milestoneTrack.style.left = `-${timelineEl.scrollLeft}px`;
+                syncing = false; 
+            });
+
+            window.addEventListener('resize', render);
+            window.addEventListener('beforeunload', (e) => { if (isDataDirty) { e.preventDefault(); e.returnValue = ''; } });
+            
+            setInterval(updateTodayLinePosition, 60000); // Update every minute
+
+            if (tasks.length === 0) {
+                const { sample, cats, milestones: sampleMilestones } = generateSampleData();
+                tasks = sample;
+                milestones = sampleMilestones;
+                if (categoryOrder.length === 0) categoryOrder = cats;
+                updateSaveStatus(false);
+            }
+
+            initializeCategoryOrder();
+            
+            updateSortButtonUI();
+            updateDependencyToggleUI();
+            updateMasterMilestoneLockIcon();
+            updateToggleScaleBtnUI();
+            render();
+        });
+  </script>
+</body>
+</html>
